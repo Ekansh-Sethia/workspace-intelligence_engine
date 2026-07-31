@@ -1,6 +1,6 @@
 # Engineering Design Decisions
 
-This document records the architectural and design decisions made during the development of the Workspace Intelligence Engine. It explains *what* was added, *why* it was added, *alternatives* considered, *trade-offs*, and *scalability* considerations.
+This document records the architectural and design decisions made during the development of the Workspace Intelligence Engine. It explains *what* was added, *why* it was added, *alternatives* considered, *trade-offs*, and *scalability* considerations and what the user can achieve/perform after the completion of this phase.
 
 ---
 
@@ -108,3 +108,24 @@ This document records the architectural and design decisions made during the dev
 
 ### What would the system/platform be capable of after this phase
 - **User Perspective**: When uploading a large workspace ZIP, users will no longer experience a "frozen" browser or connection timeouts. Instead, the upload completes quickly, and the user sees a smooth "processing" indicator on their dashboard that automatically updates in real-time once the backend finishes extracting their files.
+
+---
+
+## Phase 4: Workspace Extraction Layer
+
+### What was added
+- **ZIP Extraction and File Hashing**: In `utils.py`, `secure_extract` safely unzips the workspace, and `get_file_hash` calculates the SHA-256 hash for deduplication and tracking.
+- **Security Check (Zip Slip)**: `is_safe_path` ensures that no extracted file path can maliciously resolve outside the designated extraction directory (preventing directory traversal attacks).
+- **Filtering Logic**: Implemented `scan_and_process_workspace` which recursively scans the extracted contents, purposefully ignoring `.git`, `node_modules`, hidden files, and deleting unsupported binary files (like `.exe`).
+- **File Tree API**: Created the `GET /api/v1/workspaces/{workspace_id}/files` endpoint so clients can fetch all files successfully ingested for a workspace.
+
+### Why they were added
+- **Safety First**: Processing untrusted ZIP files from users is highly dangerous. Building rigid constraints (`is_safe_path`, stripping unsupported files) is necessary before we even attempt parsing or embedding text.
+- **Resource Management**: Extracting `.git` histories or `node_modules` folders wastes massive amounts of disk space and vector DB space. Discarding them immediately during the extraction phase keeps the system lean and focused on actual user documents.
+
+### Trade-offs
+- **Pros**: The system is completely shielded from malicious ZIP bombs and directory traversal attacks. We have clean, structured metadata (`File` objects) in Postgres before the heavy processing begins.
+- **Cons**: We lose support for users who legitimately want to search through unsupported files (like arbitrary binary blobs or raw source code files that aren't on the supported whitelist). We are trading total flexibility for stability and security.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: The platform can now safely "digest" any uploaded ZIP file. Users are guaranteed that their files are securely unpacked, filtered for junk, and organized in the database. The frontend can now visually display a file tree/list of all the valid documents that were found inside their uploaded ZIP!

@@ -6,8 +6,8 @@ from typing import List
 from core.database import get_db
 from authentication.dependencies import get_current_user
 from authentication.models import User
-from workspaces.models import Workspace, WorkspaceStatus
-from workspaces.schemas import WorkspaceResponse
+from workspaces.models import Workspace, WorkspaceStatus, File as FileModel
+from workspaces.schemas import WorkspaceResponse, FileResponse
 from workspaces.services import delete_workspace_storage
 from workspaces.tasks import process_workspace_upload
 import os
@@ -38,6 +38,17 @@ async def create_workspace(
     file.file.seek(0)
     if file_size > 50 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large. Maximum size is 50MB.")
+        
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        
+    # Quick synchronous check to ensure it's actually a valid ZIP file
+    import zipfile
+    if not zipfile.is_zipfile(file.file):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid ZIP archive or is corrupt.")
+    
+    # Reset pointer after zipfile check
+    file.file.seek(0)
         
     # Create DB entry first to get ID
     new_workspace = Workspace(
@@ -86,3 +97,20 @@ async def delete_workspace(
     
     # Delete local files
     delete_workspace_storage(workspace.id)
+
+@router.get("/{workspace_id}/files", response_model=List[FileResponse])
+async def get_workspace_files(
+    workspace_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verify workspace ownership first
+    ws_result = await db.execute(select(Workspace).where(Workspace.id == workspace_id, Workspace.owner_id == current_user.id))
+    workspace = ws_result.scalars().first()
+    
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+        
+    # Get all files for this workspace
+    result = await db.execute(select(FileModel).where(FileModel.workspace_id == workspace_id))
+    return result.scalars().all()

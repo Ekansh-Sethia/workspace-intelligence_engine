@@ -14,5 +14,16 @@ class WorkspaceResponse(BaseModel):
     created_at: datetime
     owner_id: int
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
+
+class FileResponse(BaseModel):
+    id: int
+    workspace_id: int
+    relative_path: str
+    file_hash: str
+    mime_type: str
+    size: int
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
