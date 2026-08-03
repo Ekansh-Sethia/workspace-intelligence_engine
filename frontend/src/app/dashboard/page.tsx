@@ -42,13 +42,13 @@ export default function DashboardPage() {
     useEffect(() => {
         const hasProcessing = workspaces.some(ws => ws.status === 'processing' || ws.status === 'pending');
         let interval: NodeJS.Timeout;
-        
+
         if (hasProcessing) {
             interval = setInterval(() => {
                 fetchWorkspaces();
             }, 3000);
         }
-        
+
         return () => {
             if (interval) clearInterval(interval);
         };
@@ -61,7 +61,7 @@ export default function DashboardPage() {
 
     const handleDelete = async (id: number) => {
         if (!confirm('Are you sure you want to delete this workspace? This cannot be undone.')) return;
-        
+
         try {
             const token = getToken();
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/workspaces/${id}`, {
@@ -88,21 +88,21 @@ export default function DashboardPage() {
         <div className="min-h-screen bg-[#f7f9f6] text-[#333333]">
             <header className="bg-white border-b border-[#e8efe6] px-8 py-4 flex justify-between items-center sticky top-0 z-10">
                 <h1 className="text-xl font-semibold text-[#2d372c]">Workspace Intelligence Engine</h1>
-                <button 
+                <button
                     onClick={handleLogout}
                     className="px-4 py-2 text-sm font-medium text-[#7a8c78] hover:text-[#2d372c] transition-colors"
                 >
                     Log out
                 </button>
             </header>
-            
+
             <main className="max-w-7xl mx-auto px-8 py-12">
                 <div className="flex justify-between items-center mb-8">
                     <div>
                         <h2 className="text-2xl font-semibold tracking-tight text-[#2d372c]">Your Workspaces</h2>
-                        <p className="text-[#7a8c78] mt-1">Manage and query your codebase contexts.</p>
+                        <p className="text-[#7a8c78] mt-1">Manage and query your documentation contexts.</p>
                     </div>
-                    <button 
+                    <button
                         onClick={() => setIsModalOpen(true)}
                         className="px-5 py-2.5 bg-[#3d4c3c] hover:bg-[#2d372c] text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
                     >
@@ -119,9 +119,9 @@ export default function DashboardPage() {
                         </div>
                         <h3 className="text-lg font-medium text-[#2d372c] mb-2">No workspaces yet</h3>
                         <p className="text-[#7a8c78] max-w-sm mx-auto mb-6">
-                            Create your first workspace by uploading a ZIP archive containing your codebase or documentation.
+                            Create your first workspace by uploading a ZIP archive containing your documentation.
                         </p>
-                        <button 
+                        <button
                             onClick={() => setIsModalOpen(true)}
                             className="px-5 py-2.5 bg-white border-2 border-[#3d4c3c] text-[#3d4c3c] hover:bg-[#f0f4ef] text-sm font-medium rounded-lg transition-colors"
                         >
@@ -131,20 +131,20 @@ export default function DashboardPage() {
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {workspaces.map(ws => (
-                            <WorkspaceCard 
-                                key={ws.id} 
-                                workspace={ws} 
-                                onDelete={handleDelete} 
+                            <WorkspaceCard
+                                key={ws.id}
+                                workspace={ws}
+                                onDelete={handleDelete}
                             />
                         ))}
                     </div>
                 )}
             </main>
 
-            <UploadModal 
-                isOpen={isModalOpen} 
-                onClose={() => setIsModalOpen(false)} 
-                onSuccess={() => fetchWorkspaces()} 
+            <UploadModal
+                isOpen={isModalOpen}
+                onClose={() => setIsModalOpen(false)}
+                onSuccess={() => fetchWorkspaces()}
             />
         </div>
     );

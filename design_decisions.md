@@ -129,3 +129,31 @@ This document records the architectural and design decisions made during the dev
 
 ### What would the system/platform be capable of after this phase
 - **User Perspective**: The platform can now safely "digest" any uploaded ZIP file. Users are guaranteed that their files are securely unpacked, filtered for junk, and organized in the database. The frontend can now visually display a file tree/list of all the valid documents that were found inside their uploaded ZIP!
+
+---
+
+## Phase 5: Document Processing Layer
+
+### What was added
+- **Parser Abstraction (`parsers/base.py`)**: Defined a `Document` dataclass (filename, source_path, text, page_count, metadata) as the unified internal representation for all parsed files, and an abstract `BaseParser` interface that all concrete parsers implement.
+- **Text Parser (`parsers/text_parser.py`)**: Handles `.txt`, `.md`, `.markdown` files. Reads with UTF-8 encoding and gracefully falls back to latin-1 for files with non-standard byte sequences.
+- **PDF Parser (`parsers/pdf_parser.py`)**: Uses `pypdf` to extract text page-by-page. Captures document metadata (title, author) when available. Logs a warning for scanned-image PDFs that yield no text.
+- **DOCX Parser (`parsers/docx_parser.py`)**: Uses `python-docx` to extract paragraph text. Captures core properties (title, author). Tables and embedded objects are intentionally skipped in V1.
+- **PPTX Parser (`parsers/pptx_parser.py`)**: Uses `python-pptx` to extract text from each slide's text frames. Slide boundaries are separated with double newlines so the downstream chunker can detect slide breaks.
+- **Image Parser (`parsers/image_parser.py`)**: Uses `pytesseract` (Tesseract OCR) to extract visible text from images (.jpg, .png, .webp, .gif). Designed with a `CaptionProvider` abstract base class so that Gemini/OpenAI Vision or local models (Florence-2) can be plugged in via dependency injection without modifying the parser.
+- **Parser Factory (`parsers/factory.py`)**: A `get_parser(extension)` function that maps file extensions to singleton parser instances. This is the single entry point for the entire parsing layer.
+- **Celery Integration (`workspaces/tasks.py`)**: Added a `parse_workspace_files()` step between extraction and marking the workspace as READY. Each file is parsed independently with isolated error handling — a single corrupt file marks that file as FAILED but does not crash the entire workspace job.
+
+### Why they were added
+- **Unified Representation**: Every downstream layer (chunking, embedding, metadata) needs a consistent data structure. The `Document` dataclass provides this without tying us to any specific file format.
+- **Factory Pattern**: New file types can be supported by simply adding a parser class and registering it in the factory — zero changes to existing code (Open/Closed Principle).
+- **Isolated Failure**: Real-world workspaces contain mixed-quality files. A corrupted PDF should not prevent a valid DOCX from being processed. Each file's parsing is wrapped in its own try/except block.
+- **Extension Point for Vision AI**: The `CaptionProvider` ABC is a forward-looking design. When we reach the LLM Gateway phase, we can inject a Gemini or OpenAI Vision provider into the ImageParser without touching the parser's core logic.
+
+### Trade-offs
+- **Pros**: Clean separation of concerns (one parser per file type), easy to test in isolation, graceful degradation on corrupt files, and the CaptionProvider extension point future-proofs the image pipeline.
+- **Cons**: `pytesseract` requires the `tesseract-ocr` system package in the Docker image, adding ~30MB to the image size. DOCX parsing in V1 skips tables and embedded objects, which means some document content will be missed. Scanned-image PDFs without an OCR text layer will produce empty text.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: When a user uploads a ZIP containing PDFs, Word documents, PowerPoint slides, text files, and images, the backend now reads and extracts the actual text content from every supported file. The file status in the database transitions from EXTRACTED to PARSED (or FAILED for corrupt files). This extracted text is the raw material that will be chunked and embedded in the next phases, enabling semantic search and AI-powered Q&A over the workspace.
+

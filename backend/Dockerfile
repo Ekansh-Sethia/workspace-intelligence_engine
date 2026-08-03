@@ -20,6 +20,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Install runtime system dependencies (tesseract for OCR)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy wheels from builder and install
 COPY --from=builder /app/wheels /wheels
 COPY --from=builder /app/requirements.txt .
