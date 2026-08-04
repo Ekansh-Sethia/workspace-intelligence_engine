@@ -179,3 +179,58 @@ This document records the architectural and design decisions made during the dev
 
 ### What would the system/platform be capable of after this phase
 - **User Perspective**: While invisible to the end user on the frontend, the backend now fundamentally understands how to break down massive documents into digestible pieces. When a user uploads a workspace, the background pipeline seamlessly extracts the files, reads their text, slices that text into AI-friendly chunks, and permanently stores those chunks in the database. The system is now fully prepared to generate vector embeddings for semantic search.
+
+---
+
+## Phase 1 (Supplement): Refresh Token Authentication
+
+### What was added
+- **Refresh Token Endpoint (`POST /auth/refresh`)**: A new endpoint that accepts a long-lived refresh token and returns a new short-lived access token + a rotated refresh token.
+- **Two-Token Strategy**: Access tokens are now short-lived (30 minutes). Refresh tokens are long-lived (7 days) and stored separately in `localStorage` as `wie_refresh_token`.
+- **`type` JWT Claim**: Both tokens now carry a `"type"` claim (`"access"` or `"refresh"`). The `get_current_user` dependency enforces that only `"access"` tokens are accepted for protected routes, preventing misuse of a refresh token as a bearer credential.
+- **`fetchWithAuth` Wrapper (`frontend/src/lib/api.ts`)**: A transparent fetch wrapper that automatically retries a failed `401` response by calling `/auth/refresh`, storing the new tokens, and replaying the original request — invisible to the user.
+
+### Why they were added
+- **Security**: Short-lived access tokens limit the blast radius of a stolen token — an attacker only has 30 minutes of access instead of 24 hours.
+- **User Experience**: Without refresh tokens, users would be forcibly logged out every 30 minutes. The automatic silent refresh keeps sessions alive for 7 days without any manual re-authentication.
+
+### Why not their alternatives
+- **`httpOnly` Cookie-based Refresh Tokens**: The gold standard for web security (cookies are inaccessible to JavaScript, preventing XSS token theft). However, they require careful CSRF protection setup (e.g., `SameSite=Strict`, CSRF tokens), and complicate the cross-origin setup between the Next.js frontend and FastAPI backend. `localStorage` was chosen for V1 simplicity with the understanding it should be migrated to `httpOnly` cookies before any public exposure.
+
+### Trade-offs
+- **Pros**: Massively improved security over a single long-lived token. Transparent UX — users stay logged in without noticing. Token rotation on refresh means a leaked refresh token becomes invalid after first use.
+- **Cons**: `localStorage` is accessible to JavaScript and vulnerable to XSS attacks. Rotating refresh tokens adds complexity — if a network error occurs during rotation, the user may be erroneously logged out.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: Users can stay logged in for up to 7 days without re-entering their credentials. The app silently refreshes their session in the background. Logging out now fully invalidates both the access and refresh tokens from the client.
+
+---
+
+## Phase 7: Embedding Layer
+
+### What was added
+- **`EmbeddingProvider` Abstraction (`embeddings/base.py`)**: An abstract base class defining the interface for any embedding backend: `embed_batch(texts) -> List[List[float]]`, `vector_size`, and `model_name`. This is the extension point for adding new providers without touching the pipeline.
+- **`FastEmbedProvider` (`embeddings/fastembed_provider.py`)**: The V1 implementation using the `fastembed` library (ONNX runtime) with the `BAAI/bge-small-en-v1.5` model. The model is lazy-loaded on first use and cached in-process, meaning it is only loaded once per Celery worker lifetime.
+- **`EmbeddingService` (`embeddings/service.py`)**: Orchestrates the full indexing flow — fetches all `Chunk` records for a workspace from Postgres, processes them in configurable batches of 32, generates vectors via the injected provider, and upserts `PointStruct` objects into Qdrant. Also provides `delete_workspace_vectors(workspace_id)` for cleanup.
+- **Qdrant Client & Collection Init (`core/qdrant.py`)**: A singleton `QdrantClient`, an `init_qdrant()` function that idempotently creates the `workspace_chunks` collection (384-dim, Cosine distance, HNSW) and creates payload indexes on `workspace_id` and `file_id`.
+- **FastAPI Lifespan Hook (`main.py`)**: `init_qdrant()` is called inside the FastAPI `lifespan` context manager, guaranteeing the collection exists before the first request is ever served.
+- **Celery Pipeline Integration (`workspaces/tasks.py`)**: After `parse_and_chunk_workspace_files()` completes, a new Step 6 calls `EmbeddingService.embed_and_store_workspace()`. The workspace status only transitions to `READY` after all vectors are stored in Qdrant.
+- **Qdrant Cleanup on Delete (`workspaces/router.py`)**: The `DELETE /workspaces/{id}` endpoint calls `EmbeddingService.delete_workspace_vectors()` after removing the Postgres record and local files. This is wrapped in a try/except so that a Qdrant outage never causes a workspace deletion to fail.
+
+### Why they were added
+- **Semantic Search Foundation**: This phase is the bridge between raw text (Phase 6) and intelligent Q&A (future Chat Layer). Vectors stored in Qdrant are what power similarity search — finding the most relevant document chunks for any user query.
+- **`EmbeddingProvider` abstraction**: Follows the Open/Closed Principle. Adding an `OpenAIEmbeddingProvider` or `SentenceTransformersProvider` later requires only writing a new file and swapping the injected instance — zero changes to `EmbeddingService` or `tasks.py`.
+- **Postgres as source of truth**: Chunk text is stored in Postgres (Phase 6) and *also* duplicated in Qdrant's point payload. This is intentional: the Qdrant payload carries just enough context (`text`, `workspace_id`, `file_id`, `chunk_index`, `page_number`) for the retrieval layer to build an answer without a second round-trip to Postgres.
+
+### Why not their alternatives
+- **`sentence-transformers` (PyTorch) instead of `fastembed` (ONNX)**: Both use the same underlying HuggingFace models. `fastembed` was chosen because it runs via the ONNX Runtime — no PyTorch dependency means ~2.5GB smaller Docker images, significantly lower RAM usage, and faster cold-start times. The trade-off: ONNX models can't be fine-tuned in-process (but fine-tuning is out of scope for V1).
+- **OpenAI `text-embedding-ada-002` / `text-embedding-3-small`**: API-based embeddings have higher quality but incur per-token API costs, introduce network latency on every upload, and require an OpenAI API key even for local development. The `EmbeddingProvider` abstraction means this can be swapped in for a production tier without any pipeline changes.
+- **Pinecone / Weaviate instead of Qdrant**: Qdrant was already provisioned in `docker-compose.yml` from Phase 0. It is open-source, self-hosted, and has a native Python client with strong typed models. Pinecone is managed/cloud-only; Weaviate has more complex configuration. Qdrant hits the sweet spot for self-hosted production quality.
+
+### Trade-offs
+- **Pros**: Zero API costs for embedding generation. Fully local and offline-capable. Clean abstraction allows upgrading the embedding backend without touching the indexing pipeline. Payload indexes on `workspace_id` and `file_id` make per-workspace filtered search O(log N).
+- **Cons**: `BAAI/bge-small-en-v1.5` is an English-only model — workspaces in other languages will produce poor search quality. The ONNX model (~130MB) is downloaded from HuggingFace Hub on the first task execution inside the container, which adds a one-time delay. The Qdrant `points_count` and Postgres `chunk_count` can diverge if a worker crashes mid-upsert — a re-indexing recovery job is not yet implemented for V1.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: Still transparent to the end user (the frontend dashboard shows the same `READY` status). However, the backend is now fundamentally different: every document chunk inside a workspace has been converted into a 384-dimensional semantic fingerprint and stored in a high-speed vector index. The system is now fully primed to answer natural language questions over any uploaded workspace — the Chat Layer can now perform lightning-fast semantic retrieval over millions of chunks in milliseconds.
+

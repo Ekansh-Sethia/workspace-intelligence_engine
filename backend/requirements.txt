@@ -22,3 +22,7 @@ Pillow>=10.0.0
 # Phase 6: Chunking
 langchain-text-splitters>=0.2.2
 tiktoken>=0.7.0
+
+# Phase 7: Embedding Layer
+qdrant-client>=1.9.0
+fastembed>=0.2.0

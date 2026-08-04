@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from utils.config import settings
@@ -5,11 +6,24 @@ from utils.exceptions import WIEException, wie_exception_handler, global_excepti
 from api.health import router as health_router
 from authentication.router import router as auth_router
 from workspaces.router import router as workspaces_router
+from core.qdrant import init_qdrant
+from utils.logger import logger
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run startup tasks before serving requests."""
+    logger.info("Application startup: initialising Qdrant...")
+    init_qdrant()
+    logger.info("Application startup complete.")
+    yield
+    logger.info("Application shutdown.")
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.PROJECT_NAME,
-        openapi_url=f"{settings.API_V1_STR}/openapi.json"
+        openapi_url=f"{settings.API_V1_STR}/openapi.json",
+        lifespan=lifespan,
     )
 
     # Set all CORS enabled origins

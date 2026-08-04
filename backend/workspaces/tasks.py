@@ -7,6 +7,8 @@ from workspaces.utils import secure_extract, scan_and_process_workspace
 from chunking.tokenizer import TiktokenTokenizer
 from chunking.splitter import DocumentChunker
 from parsers.factory import get_parser
+from embeddings import FastEmbedProvider
+from embeddings.service import EmbeddingService
 from utils.logger import logger
 import os
 import shutil
@@ -122,10 +124,17 @@ async def run_processing(workspace_id: int, zip_file_path: str):
         # 5. Parse and chunk all extracted files (Phases 5 & 6)
         await parse_and_chunk_workspace_files(workspace_id, raw_dir)
         
-        # 6. Update status to ready
+        # 6. Generate embeddings and store in Qdrant (Phase 7)
+        provider = FastEmbedProvider()
+        service = EmbeddingService(provider=provider)
+        async with AsyncSessionLocal() as db:
+            total_vectors = await service.embed_and_store_workspace(workspace_id, db)
+        logger.info(f"Workspace {workspace_id}: {total_vectors} vectors stored in Qdrant")
+        
+        # 7. Update status to ready
         await update_workspace_status(workspace_id, WorkspaceStatus.READY)
         
-        # 7. Cleanup the raw zip file to save space only on success
+        # 8. Cleanup the raw zip file to save space only on success
         if zip_path.exists():
             os.remove(zip_path)
             

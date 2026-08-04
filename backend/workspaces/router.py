@@ -10,6 +10,8 @@ from workspaces.models import Workspace, WorkspaceStatus, File as FileModel
 from workspaces.schemas import WorkspaceResponse, FileResponse
 from workspaces.services import delete_workspace_storage
 from workspaces.tasks import process_workspace_upload
+from embeddings import FastEmbedProvider
+from embeddings.service import EmbeddingService
 import os
 import shutil
 from pathlib import Path
@@ -97,6 +99,14 @@ async def delete_workspace(
     
     # Delete local files
     delete_workspace_storage(workspace.id)
+    
+    # Delete vectors from Qdrant (best-effort, don't fail if Qdrant is unavailable)
+    try:
+        service = EmbeddingService(provider=FastEmbedProvider())
+        service.delete_workspace_vectors(workspace.id)
+    except Exception as e:
+        from utils.logger import logger
+        logger.warning(f"Failed to delete Qdrant vectors for workspace {workspace_id}: {e}")
 
 @router.get("/{workspace_id}/files", response_model=List[FileResponse])
 async def get_workspace_files(
