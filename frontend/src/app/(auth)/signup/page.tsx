@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { setToken } from '@/lib/auth';
+import { setToken, setRefreshToken } from '@/lib/auth';
 
 export default function SignupPage() {
     const [email, setEmail] = useState('');
@@ -46,6 +46,7 @@ export default function SignupPage() {
             if (loginRes.ok) {
                 const loginData = await loginRes.json();
                 setToken(loginData.access_token);
+                setRefreshToken(loginData.refresh_token);
                 router.push('/dashboard');
             } else {
                 router.push('/login');

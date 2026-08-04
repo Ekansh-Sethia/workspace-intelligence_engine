@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { isAuthenticated, removeToken, getToken } from '@/lib/auth';
+import { isAuthenticated, removeToken } from '@/lib/auth';
+import { fetchWithAuth } from '@/lib/api';
 import { WorkspaceCard } from '@/components/WorkspaceCard';
 import { UploadModal } from '@/components/UploadModal';
 
@@ -14,12 +15,7 @@ export default function DashboardPage() {
 
     const fetchWorkspaces = useCallback(async () => {
         try {
-            const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/workspaces`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
+            const res = await fetchWithAuth('/api/v1/workspaces');
             if (res.ok) {
                 const data = await res.json();
                 setWorkspaces(data);
@@ -63,12 +59,8 @@ export default function DashboardPage() {
         if (!confirm('Are you sure you want to delete this workspace? This cannot be undone.')) return;
 
         try {
-            const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/workspaces/${id}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
+            const res = await fetchWithAuth(`/api/v1/workspaces/${id}`, {
+                method: 'DELETE'
             });
             if (res.ok) {
                 fetchWorkspaces();

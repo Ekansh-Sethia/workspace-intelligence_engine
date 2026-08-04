@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { setToken } from '@/lib/auth';
+import { setToken, setRefreshToken } from '@/lib/auth';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
@@ -38,6 +38,7 @@ export default function LoginPage() {
 
             const data = await res.json();
             setToken(data.access_token);
+            setRefreshToken(data.refresh_token);
             router.push('/dashboard');
         } catch (err: any) {
             setError(err.message);

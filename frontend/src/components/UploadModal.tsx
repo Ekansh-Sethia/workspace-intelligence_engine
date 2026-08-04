@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { getToken } from '@/lib/auth';
+import { fetchWithAuth } from '@/lib/api';
 
 export function UploadModal({ isOpen, onClose, onSuccess }: { isOpen: boolean, onClose: () => void, onSuccess: () => void }) {
     const [name, setName] = useState('');
@@ -30,12 +30,8 @@ export function UploadModal({ isOpen, onClose, onSuccess }: { isOpen: boolean, o
         formData.append('file', file);
 
         try {
-            const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/workspaces`, {
+            const res = await fetchWithAuth('/api/v1/workspaces', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                },
                 body: formData,
             });
 
