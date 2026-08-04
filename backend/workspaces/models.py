@@ -14,6 +14,7 @@ class FileStatus(str, enum.Enum):
     PENDING = "pending"
     EXTRACTED = "extracted"
     PARSED = "parsed"
+    CHUNKED = "chunked"
     FAILED = "failed"
 
 class Workspace(Base):
@@ -39,7 +40,22 @@ class File(Base):
     mime_type = Column(String, nullable=False)
     size = Column(Integer, nullable=False) # Size in bytes
     status = Column(String, default=FileStatus.PENDING)
+    chunk_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     workspace = relationship("Workspace", back_populates="files")
+    chunks = relationship("Chunk", back_populates="file", cascade="all, delete-orphan")
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_id = Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    text = Column(String, nullable=False)
+    page_number = Column(Integer, nullable=True) # Optional page or slide number
+    token_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    file = relationship("File", back_populates="chunks")

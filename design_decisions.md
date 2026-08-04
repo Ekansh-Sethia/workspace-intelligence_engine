@@ -157,3 +157,25 @@ This document records the architectural and design decisions made during the dev
 ### What would the system/platform be capable of after this phase
 - **User Perspective**: When a user uploads a ZIP containing PDFs, Word documents, PowerPoint slides, text files, and images, the backend now reads and extracts the actual text content from every supported file. The file status in the database transitions from EXTRACTED to PARSED (or FAILED for corrupt files). This extracted text is the raw material that will be chunked and embedded in the next phases, enabling semantic search and AI-powered Q&A over the workspace.
 
+---
+
+## Phase 6: Chunking Layer
+
+### What was added
+- **Tokenizer Abstraction (`chunking/tokenizer.py`)**: Defined a `Tokenizer` abstract base class and a `TiktokenTokenizer` implementation (using OpenAI's `cl100k_base` encoding) for counting tokens.
+- **Document Chunker (`chunking/splitter.py`)**: Uses `RecursiveCharacterTextSplitter` from `langchain-text-splitters`. It splits the in-memory `Document` text into chunks of ~500 tokens with a 100-token overlap, using the injected `Tokenizer` to measure length.
+- **PostgreSQL Chunk Persistence**: Created a new `Chunk` SQLAlchemy model in `workspaces/models.py`. Added a `chunk_count` field to the `File` model and introduced a new `CHUNKED` file status.
+- **Worker Integration (`workspaces/tasks.py`)**: Updated the background worker so that immediately after a file is parsed into memory, its text is chunked and the resulting `Chunk` objects are saved directly to PostgreSQL.
+
+### Why they were added
+- **LLM Context Limits**: AI models cannot ingest a 50-page document all at once. Chunking breaks large walls of text into semantically cohesive paragraphs, making it possible to isolate precisely *where* an answer exists in a workspace.
+- **Overlap**: A 100-token overlap ensures that if a sentence or concept spans a chunk boundary, it isn't abruptly cut in half, preserving semantic meaning for the AI.
+- **Postgres Source of Truth**: While vector databases (like Qdrant) *can* store text in their payload, storing chunks in PostgreSQL ensures relational integrity. We can easily query "all chunks belonging to file X" or "delete all chunks for workspace Y" using native SQL, making debugging and future relational features (like pagination or metadata filtering) much easier.
+- **Memory Efficiency**: By integrating chunking directly into the parsing loop, we avoid persisting the raw, massive document string to disk or the database. It exists in memory just long enough to be sliced into chunks.
+
+### Trade-offs
+- **Pros**: Clean abstraction of token counting makes swapping to a different tokenizer trivial. Storing chunks in PostgreSQL provides a highly durable, queryable source of truth. In-memory processing saves I/O overhead.
+- **Cons**: The PostgreSQL database will grow significantly larger since it now stores the full text of every workspace in chunk form. `tiktoken` adds a small overhead compared to character-based splitting, but yields infinitely better AI context.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: While invisible to the end user on the frontend, the backend now fundamentally understands how to break down massive documents into digestible pieces. When a user uploads a workspace, the background pipeline seamlessly extracts the files, reads their text, slices that text into AI-friendly chunks, and permanently stores those chunks in the database. The system is now fully prepared to generate vector embeddings for semantic search.
