@@ -8,10 +8,12 @@ from authentication.dependencies import get_current_user
 from authentication.models import User
 from workspaces.models import Workspace, WorkspaceStatus, File as FileModel
 from workspaces.schemas import WorkspaceResponse, FileResponse
+from workspaces.search_schemas import SearchQuery, SearchResult
 from workspaces.services import delete_workspace_storage
 from workspaces.tasks import process_workspace_upload
 from embeddings import FastEmbedProvider
 from embeddings.service import EmbeddingService
+from embeddings.search import SearchService
 import os
 import shutil
 from pathlib import Path
@@ -124,3 +126,39 @@ async def get_workspace_files(
     # Get all files for this workspace
     result = await db.execute(select(FileModel).where(FileModel.workspace_id == workspace_id))
     return result.scalars().all()
+
+
+@router.post("/{workspace_id}/search", response_model=list[SearchResult])
+async def search_workspace(
+    workspace_id: int,
+    body: SearchQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Perform a semantic similarity search against a workspace's indexed chunks.
+    Returns ranked chunks ordered by cosine similarity to the query.
+    """
+    # Enforce ownership — users can only search their own workspaces
+    ws_result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id,
+            Workspace.owner_id == current_user.id
+        )
+    )
+    workspace = ws_result.scalars().first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    if workspace.status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workspace is not ready for search (current status: {workspace.status})"
+        )
+
+    service = SearchService(provider=FastEmbedProvider())
+    return service.search(
+        workspace_id=workspace_id,
+        query=body.query,
+        limit=body.limit,
+    )

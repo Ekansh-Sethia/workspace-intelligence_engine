@@ -234,3 +234,35 @@ This document records the architectural and design decisions made during the dev
 ### What would the system/platform be capable of after this phase
 - **User Perspective**: Still transparent to the end user (the frontend dashboard shows the same `READY` status). However, the backend is now fundamentally different: every document chunk inside a workspace has been converted into a 384-dimensional semantic fingerprint and stored in a high-speed vector index. The system is now fully primed to answer natural language questions over any uploaded workspace — the Chat Layer can now perform lightning-fast semantic retrieval over millions of chunks in milliseconds.
 
+---
+
+## Phase 8: Semantic Search Layer
+
+### What was added
+- **`SearchService` (`embeddings/search.py`)**: Orchestrates the full retrieval flow — embeds the query string via the injected `EmbeddingProvider`, executes a workspace-scoped filtered similarity search against Qdrant using `client.query_points()`, and unpacks the `ScoredPoint` results into typed `SearchResult` Pydantic objects.
+- **Search Schemas (`workspaces/search_schemas.py`)**: `SearchQuery` (request body with `query` string and `limit` 1–20) and `SearchResult` (response with `score`, `text`, `file_id`, `chunk_id`, `chunk_index`, `page_number`).
+- **`POST /workspaces/{id}/search` Endpoint (`workspaces/router.py`)**: Enforces workspace ownership before searching. Returns `409 Conflict` if the workspace is not yet in `READY` status, preventing searches against partially-indexed workspaces.
+- **Workspace Detail Page (`frontend/src/app/workspace/[id]/page.tsx`)**: A dedicated page with a natural language search bar, a configurable result-count selector (3/5/10/15), and a results panel showing ranked chunks with color-coded relevance bars (Very Relevant / Relevant / Somewhat Relevant / Low Relevance) and cosine similarity percentages.
+- **Clickable WorkspaceCard (`frontend/src/components/WorkspaceCard.tsx`)**: `READY` workspace cards now navigate to the detail/search page on click. A `data-no-nav` attribute on the Delete button prevents accidental navigation when deleting.
+
+### Why they were added
+- **Completing the RAG retrieval half**: The Embedding Layer (Phase 7) stores vectors; the Search Layer is the read path that makes those vectors useful. Together, they form the complete retrieval foundation required before the Chat Layer can generate answers.
+- **Workspace-scoped filtering**: Multi-tenancy is critical. The `FieldCondition` filter on `workspace_id` is applied at the Qdrant query level, not post-hoc in Python. This means Qdrant's HNSW index only traverses vectors belonging to the target workspace, making searches both faster and more secure.
+- **`409` status guard**: Searching a partially-indexed workspace (still chunking/embedding) would return incomplete results, confusing the user. The guard ensures search is only available once the full pipeline has completed.
+- **In-browser test UI**: Avoids the need to open Swagger UI for every iteration during development. The scored result panel with relevance labels makes it immediately obvious whether the embedding quality is good or poor for a given document type.
+
+### Why not their alternatives
+- **Full-text / BM25 keyword search instead of vector search**: Keyword search would only match results containing the exact words in the query. A user asking "how does authentication work?" would miss a chunk that says "JWT token verification flow" because "authentication" doesn't appear verbatim. Vector search captures semantic meaning across paraphrase boundaries.
+- **Hybrid search (BM25 + Vector)**: The gold standard for production RAG. However, it requires integrating a separate keyword index (e.g., Qdrant's sparse vector support or Elasticsearch). Deferred to a future phase — the `SearchService` abstraction makes it easy to add a re-ranking step later.
+- **Cross-encoder re-ranking**: A cross-encoder model (e.g., `ms-marco-MiniLM-L-6-v2`) would re-score the top-K results with full query-document awareness, eliminating the ranking ambiguity observed with short/ambiguous queries. Adds ~100–200ms latency per search and requires another model download. Deferred to Phase 9 or later.
+
+### Known Limitations (V1)
+- **Technical acronym ambiguity**: Short or ambiguous queries (e.g., `"RAG and Cloud"`) may rank a chunk with cloud-account keywords higher than a chunk explicitly about Retrieval-Augmented Generation, because the embedding model (`BAAI/bge-small-en-v1.5`) is trained on general text and doesn't strongly associate "RAG" with its AI meaning. This is resolved by Hybrid Search or Re-ranking in a future phase.
+- **Scanned PDF support**: Image-based (scanned) PDFs produce very low text yields via `pypdf`. OCR fallback via Tesseract is not implemented for large documents (640 pages ≈ 20–50 minutes on CPU). This will be addressed using the Vision API in Phase 9.
+
+### Trade-offs
+- **Pros**: Zero extra infrastructure — search runs against the same Qdrant instance used for indexing. Strict workspace isolation enforced at the database query level. The frontend test UI provides immediate feedback on embedding quality during development.
+- **Cons**: Pure vector search is susceptible to technical acronym confusion and query-length mismatch (short queries vs. long dense chunks). No result caching — every search re-embeds the query and hits Qdrant. For V1 this is fine; at scale, a query cache would be warranted.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: Users can now click on any `READY` workspace and type a natural language question into the search bar. Within seconds, the system returns the top matching document chunks, ranked by semantic relevance with a visual confidence score. This is the first time the user can directly interact with the AI-powered intelligence that has been built up across the previous seven phases. The system is now one step away from full conversational Q&A — all it needs is an LLM to read these retrieved chunks and generate a fluent answer.
