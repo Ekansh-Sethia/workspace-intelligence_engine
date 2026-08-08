@@ -13,14 +13,20 @@ from parsers.text_parser import TextParser
 from parsers.pdf_parser import PdfParser
 from parsers.docx_parser import DocxParser
 from parsers.pptx_parser import PptxParser
-from parsers.image_parser import ImageParser
+from parsers.image_parser import ImageParser, GroqCaptionProvider
+from utils.config import settings
+
+# Setup Caption Provider if GROQ_API_KEY is available
+caption_provider = None
+if settings.GROQ_API_KEY:
+    caption_provider = GroqCaptionProvider(api_key=settings.GROQ_API_KEY)
 
 # Singleton instances — parsers are stateless, so a single instance is fine.
 _text_parser = TextParser()
 _pdf_parser = PdfParser()
 _docx_parser = DocxParser()
 _pptx_parser = PptxParser()
-_image_parser = ImageParser()  # No caption provider in V1
+_image_parser = ImageParser(caption_provider=caption_provider)
 
 # Extension → parser mapping
 _PARSER_REGISTRY: dict[str, BaseParser] = {

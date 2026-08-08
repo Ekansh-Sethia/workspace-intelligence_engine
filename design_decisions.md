@@ -266,3 +266,27 @@ This document records the architectural and design decisions made during the dev
 
 ### What would the system/platform be capable of after this phase
 - **User Perspective**: Users can now click on any `READY` workspace and type a natural language question into the search bar. Within seconds, the system returns the top matching document chunks, ranked by semantic relevance with a visual confidence score. This is the first time the user can directly interact with the AI-powered intelligence that has been built up across the previous seven phases. The system is now one step away from full conversational Q&A — all it needs is an LLM to read these retrieved chunks and generate a fluent answer.
+
+---
+
+## Phase 9: LLM Gateway & Streaming Fixes
+
+### What was added
+- **LLM Gateway (`gateway.py`)**: Integrated `LiteLLM` as a universal, provider-agnostic router.
+- **Model Fallbacks**: Configured `gemini/gemini-3.6-flash` as the primary reasoning engine, with `groq/llama-3.1-8b-instant` as an automatic failover.
+- **SSE Streaming**: Implemented Server-Sent Events to stream tokens from the backend to the Next.js frontend in real-time.
+- **SSE Parser Hardening**: Fixed a critical bug in the frontend SSE reader where fragmented TCP packets and trailing HTTP chunking carriage returns (`\r`) caused `JSON.parse` to crash. The loop now rigidly buffers up to the `\n\n` boundary and explicitly uses `.trim()`.
+- **System Prompt Refinement**: Removed strict chunk-labeling rules from the system prompt (e.g., "(According to Chunk X)") to produce clean, distraction-free conversational output.
+
+### Why they were added
+- **Provider Lock-in Prevention**: Hardcoding OpenAI or Gemini SDKs makes migrating models difficult. LiteLLM provides a standardized OpenAI-compatible interface regardless of the underlying API, enabling zero-code model swapping.
+- **Resilience**: The Groq fallback guarantees that if Google AI Studio goes down or rate-limits the user, the app continues to function seamlessly via Llama 3.
+- **Streaming UX**: Waiting 10 seconds for a bulky response is unacceptable for modern AI interfaces. Streaming tokens live creates a highly responsive, "typing" effect.
+- **Parser Hardening**: Without proper buffer management and carriage return stripping, the streaming text output degraded into literal escaped strings (`\n`, `""`).
+
+### Trade-offs
+- **Pros**: Lightning-fast perceived latency via streaming. Complete immunity to single-provider API outages. Clean architectural boundary where no feature logic needs to know which model is active.
+- **Cons**: Managing raw SSE parsing in JavaScript requires careful buffer handling (as opposed to using a heavy third-party library).
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: The core RAG experience is now alive. Users can chat with their documents in a conversational interface, watching the AI instantly stream responses with perfect formatting. The AI intelligently grounds its answers in the exact documents uploaded, completing the foundational loop of the Workspace Intelligence Engine.

@@ -83,12 +83,12 @@ class SearchService:
         # 4. Unpack Qdrant ScoredPoints into our Pydantic response schema
         #    query_points() returns a QueryResponse; the hits are in .points
         #
-        #    Minimum confidence threshold: 0.51 (51%)
-        #    Results below this score are discarded. In high-dimensional vector
-        #    spaces, even unrelated vectors maintain ~30-50% cosine similarity,
-        #    so anything below 51% is treated as "no relevant content found"
-        #    rather than returned as a misleading low-confidence match.
-        MIN_SCORE_THRESHOLD = 0.51
+        #    Minimum confidence threshold: 0.30 (30%)
+        #    Results below this score are discarded. We previously set this to 51%
+        #    but found it aggressively filtered out valid chunks for short queries.
+        #    The LLM in the Chat Layer is a better judge of relevance than a hard
+        #    cosine similarity cutoff, so we supply the chunks and let the LLM filter.
+        MIN_SCORE_THRESHOLD = 0.30
 
         results = [
             SearchResult(

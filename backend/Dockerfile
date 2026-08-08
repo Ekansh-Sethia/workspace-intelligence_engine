@@ -20,9 +20,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime system dependencies (tesseract for OCR)
+# Install runtime system dependencies (tesseract for OCR, poppler for pdf2image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy wheels from builder and install

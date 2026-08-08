@@ -23,9 +23,15 @@ calling ``self._caption_provider.caption(filepath)`` if one is set.
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
+import base64
+import json
 
 from PIL import Image
 import pytesseract
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+from groq import Groq
+from groq import InternalServerError, RateLimitError
 
 from parsers.base import BaseParser, Document
 from utils.logger import logger
@@ -47,6 +53,66 @@ class CaptionProvider(ABC):
     def caption(self, image_path: Path) -> str:
         """Return a natural-language caption for the image."""
         ...
+
+
+# ------------------------------------------------------------------
+# Concrete Implementation: Groq Vision Caption Provider
+# ------------------------------------------------------------------
+
+class GroqCaptionProvider(CaptionProvider):
+    """
+    Uses Groq's Llama 3.2 Vision model to generate captions for images.
+    Implements exponential backoff to handle rate limits gracefully.
+    """
+    def __init__(self, api_key: str, model_name: str = "llama-3.2-11b-vision-preview"):
+        self.client = Groq(api_key=api_key)
+        self.model_name = model_name
+
+    def _encode_image(self, image_path: Path) -> str:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2, min=4, max=60),
+        retry=retry_if_exception_type((RateLimitError, InternalServerError)),
+        reraise=True
+    )
+    def caption(self, image_path: Path) -> str:
+        logger.info(f"GroqCaptionProvider: Generating caption for {image_path.name}")
+        base64_image = self._encode_image(image_path)
+        
+        # Determine mime type based on extension
+        ext = image_path.suffix.lower()
+        mime_type = f"image/{ext[1:]}" if ext in ['.png', '.jpeg', '.webp', '.gif'] else "image/jpeg"
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Describe this image in detail. Focus on any charts, text, diagrams, or key structural elements. Be highly descriptive as this will be used for semantic search."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+
+        chat_completion = self.client.chat.completions.create(
+            messages=messages,
+            model=self.model_name,
+            max_tokens=1024,
+            temperature=0.2,
+        )
+
+        caption = chat_completion.choices[0].message.content
+        return caption or ""
 
 
 # ------------------------------------------------------------------
