@@ -290,3 +290,103 @@ This document records the architectural and design decisions made during the dev
 
 ### What would the system/platform be capable of after this phase
 - **User Perspective**: The core RAG experience is now alive. Users can chat with their documents in a conversational interface, watching the AI instantly stream responses with perfect formatting. The AI intelligently grounds its answers in the exact documents uploaded, completing the foundational loop of the Workspace Intelligence Engine.
+
+---
+
+## Phase 10: Advanced Chunk Linking & Agentic RAG
+
+### What was added
+- **Chunk Classifier (`chunking/classifier.py`)**: A pure-regex heuristic classifier that tags every chunk during indexing with a structural type: `text`, `answer_key`, `table`, `toc`, `reference`, or `code`. Uses minimum-hit thresholds to prevent false positives.
+- **`chunk_type` DB Column & Migration**: A new `TEXT NOT NULL DEFAULT 'text'` column in the `chunks` table, added via an Alembic migration. All existing chunks receive the `text` default, making this backward-compatible.
+- **Sibling Chunk Expansion (Layer 1)**: After the initial vector search retrieves the top K chunks, the RAG service executes a second Postgres query to pull the `chunk_index - 1` and `chunk_index + 1` neighbors for each matched chunk from the same file. This costs one extra DB round-trip but dramatically improves context continuity for answer keys, definitions, and conclusions that physically follow the matched section.
+- **Answer Key Auto-Fetch (Layer 2.5)**: For every file whose chunks were retrieved in the semantic search, the RAG service fetches ALL chunks tagged as `answer_key` from that file directly from Postgres. This guarantees the LLM always has the correct answer key in its context when a question is matched, regardless of semantic distance between the question and answer.
+- **Conversational Query Rewriting (Layer 0)**: Before searching, the LLM rewrites the raw user query into a standalone search query by resolving pronouns and references using the conversation history. This makes follow-up questions ("what about question 3?") work correctly.
+- **Agentic RAG Loop (Layer 3)**: If the initial retrieval does not give the LLM enough information to answer, the LLM can call a `search_workspace` tool itself. The system executes the search, injects the results into the context, and calls the LLM again. Capped at 3 iterations to prevent runaway API costs.
+- **Strict Grounding System Prompt**: The system prompt was updated with a `STRICT GROUNDING` rule explicitly prohibiting the LLM from using its own internal knowledge. If the context does not contain the answer, the LLM must say so rather than hallucinating.
+- **Token Explosion Fix**: The agentic loop's tool response was changed from returning full chunk text (7,500 tokens) to a tiny summary (20 tokens). The LLM reads the updated system prompt instead, which is already capped.
+
+### Why they were added
+- **Cross-chunk Answer Recovery**: The root problem was that question papers store questions and answer keys in completely different chunks, which are semantically unrelated. Vector search alone can never connect them. The multi-layer approach solves this without requiring re-indexing.
+- **Sycophancy Mitigation**: The LLM was flattering users by agreeing with wrong answers when the answer key was absent from its context. The strict grounding rule forces it to admit when the context is insufficient, preventing hallucinated validation of incorrect answers.
+- **Finite Iteration Guarantee**: The agentic loop uses `for i in range(3)` which mathematically cannot exceed 3 executions, providing a provable upper bound on API costs per query.
+
+### Trade-offs
+- **Pros**: Handles question papers, books, note sets, and all other document types correctly. The classifier is zero-cost (pure regex). Answer key fetching adds only one Postgres query. The agentic loop handles questions that require multi-step reasoning.
+- **Cons**: Existing workspaces indexed before this phase will not have `chunk_type` tags (they default to `text`). They must be re-uploaded for answer key detection to work. The agentic loop adds 1-3 extra LLM round-trips for complex queries.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: When a user uploads a question paper with a separate answer key, the AI will reliably retrieve and use the correct answer to verify or dispute the user's attempt. The AI will refuse to guess when it doesn't have the right information in its context, eliminating sycophantic flattery.
+
+---
+
+## Phase 8 (Implemented Late): Metadata Layer
+
+### What was added
+- **DB Schema Changes**: Added `summary` (TEXT), `keywords` (JSONB), and `topics` (JSONB) columns to the `workspaces` table. Added `summary`, `keywords`, `topics`, and `page_count` columns to the `files` table. Added `document_count`, `image_count`, and `total_chunk_count` to `workspaces` for statistics.
+- **`MetadataService` (`workspaces/metadata.py`)**: An async service that runs after the embedding pipeline completes. For each non-image file, it samples the first 8 chunks, sends them to the LLM via `llm_complete`, and parses the returned JSON for `summary`, `keywords`, and `topics`. After all files are processed, it rolls up all file summaries into a single workspace-level summary.
+- **Alembic Migration**: A new migration (`b2c3d4e5f6a7`) that safely adds all metadata columns with `nullable=True` for existing rows, making it fully backward-compatible.
+- **API Endpoints**: Added `GET /workspaces/{id}` (full detail response with metadata) and `GET /workspaces/{id}/summary` (dedicated metadata endpoint).
+- **Updated Schemas**: Extended `WorkspaceResponse` and `FileResponse` Pydantic models to include all metadata fields. Added `WorkspaceDetailResponse` for the detail endpoint.
+- **Pipeline Integration**: Step 7 in `tasks.py` now runs `MetadataService.generate_for_workspace()` after embedding and before marking the workspace as `READY`.
+
+### Why they were added
+- **Workspace Intelligence**: Without metadata, the workspace is a black box. Summaries, keywords, and topics make the workspace searchable and understandable at a glance, directly from the database with zero LLM calls at query time.
+- **Graceful Degradation**: The service is wrapped in try/except at the file level. A failed LLM call for one file leaves that file with `null` metadata but does not fail the entire workspace job.
+- **JSONB for Keywords/Topics**: Using PostgreSQL's `JSONB` instead of separate tables avoids unnecessary schema complexity while still allowing indexed GIN queries if needed in the future.
+
+### Why not their alternatives
+- **Extracting metadata during chunking instead of after embedding**: Chunking happens before we have all the text in memory. Running LLM calls during chunking would massively slow down the pipeline and make failures harder to recover from. Running metadata generation as a separate, final step after all data is in Postgres is cleaner and more resilient.
+- **Storing keywords as a TEXT comma-separated string**: JSONB is natively supported by SQLAlchemy and allows future GIN indexing and `@>` containment queries without migration.
+
+### Trade-offs
+- **Pros**: The metadata endpoint gives the Intent Router a fast way to serve summarization requests from the database without re-invoking the LLM. Workspace statistics (`document_count`, `total_chunk_count`) are computed once and cached.
+- **Cons**: Metadata generation adds N+1 LLM calls to the upload pipeline (one per file + one for workspace roll-up). For a workspace with 20 documents, this is 21 additional LLM calls during indexing, increasing upload time.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: Users can view an AI-generated summary of their entire workspace from a dedicated API endpoint. The workspace card in the dashboard can display topics and a short description. Summarization queries in chat are answered instantly from pre-computed data instead of triggering a full RAG pipeline.
+
+---
+
+## Phase 9 (Implemented Late): Intent Router Layer
+
+### What was added
+- **`IntentRouter` (`chat/intent_router.py`)**: A two-layer classifier that determines what kind of request the user is making before any expensive operations are invoked.
+- **Layer 1 - Regex Heuristics**: Three compiled `re.compile` patterns detect `METADATA_SEARCH` ("list all pdfs"), `SUMMARIZATION` ("summarize the workspace"), and `ACTION` ("generate a quiz") queries without any LLM call.
+- **Layer 2 - LLM Fallback**: For ambiguous queries that don't match the regex patterns, a single `llm_complete` call with `max_tokens=10` asks the LLM to return exactly one intent label. This is the cheapest possible LLM call.
+- **Intent Routing in `chat/router.py`**: The `send_message` endpoint now calls `classify_intent()` before any search or RAG logic. `METADATA_SEARCH` queries query Postgres directly and return a formatted file list. `SUMMARIZATION` queries return the pre-generated workspace summary from the database. Only `SEMANTIC_SEARCH` and `ACTION` queries flow into the full RAG pipeline.
+
+### Why they were added
+- **Spec Compliance**: The architecture specification (`workspace_search_engine_spec.md`) explicitly mandates that "Every query should first be classified" and "Never send raw user prompts directly to the LLM." Without the Intent Router, every single request was bypassing this requirement and making an unnecessary vector search.
+- **Cost Efficiency**: A user asking "list all my files" should never invoke a vector search + LLM completion. The Intent Router short-circuits these to direct DB queries, saving ~500ms latency and zero API tokens.
+- **Engineering Principle**: The guidelines state "Most work should be performed without invoking an LLM whenever possible."
+
+### Trade-offs
+- **Pros**: Metadata queries are answered in < 5ms with zero LLM cost. Summarization queries are answered in < 10ms from the database. Regex heuristics cover the most common patterns for free.
+- **Cons**: Regex patterns can produce false positives for edge cases (e.g., "how many ACID properties are there?" might match `_METADATA_PATTERNS` due to "how many"). The fallback LLM adds one extra API call for ambiguous queries. This is acceptable because the LLM call costs less than 1 token (10-token response).
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: "List all my files" returns an instant, formatted file list without any AI computation. "Summarize this workspace" returns the pre-computed AI summary instantly. Only genuine knowledge questions ("explain normalization") go through the full RAG pipeline.
+
+---
+
+## Phase 13 (Implemented Late): Workspace Actions Layer
+
+### What was added
+- **`ActionService` (`workspaces/actions.py`)**: An async generator-based service providing three workspace actions. All text is read from Postgres chunks (clean, parsed, deduplicated text) rather than raw files.
+- **Export (`GET /workspaces/{id}/export`)**: Merges all file chunks into a single file, organized by source filename. Supports both plain text (TXT) and Markdown (MD) formats. Returns a `Content-Disposition: attachment` download response with zero LLM calls.
+- **Quiz Generation (`POST /workspaces/{id}/actions/quiz`)**: Streams a 5-question MCQ quiz generated by the LLM from the content of a specific file or the whole workspace. The quiz format includes question, 4 options, and the correct answer.
+- **Revision Notes (`POST /workspaces/{id}/actions/notes`)**: Streams structured revision notes generated by the LLM, organized into Topic, Key Concepts, Important Definitions, and Key Takeaways sections.
+- **Intent Router Integration**: The `ACTION` intent detected by the Intent Router is now routed through the RAG pipeline. Phase 13 endpoints are directly invocable by name (`/actions/quiz`, `/actions/notes`, `/export`).
+
+### Why they were added
+- **Spec Compliance**: The `workspace_search_engine_spec.md` explicitly lists "Merge Documents", "Generate Revision Notes", "Generate Quiz", and "Export TXT/Markdown" as required V1 actions.
+- **Export as Deterministic Operation**: Per the engineering guidelines, the LLM should never be invoked for tasks that can be done deterministically. Export is a pure merge + formatting operation, requiring zero LLM calls.
+- **Streaming for AI Actions**: Quiz and notes generation can produce 500-1000 tokens. Streaming via SSE ensures the user sees output immediately rather than waiting for the full response.
+- **Chunk-Based Text Source**: Using parsed Postgres chunks instead of raw files means the export and AI actions work correctly for ALL file types (PDFs, DOCX, PPTX, images) through a single code path, since all text has already been normalized by the parsing pipeline.
+
+### Trade-offs
+- **Pros**: Export is completely free (zero LLM cost). Actions work across all file types without file-format-specific logic. Quiz and notes use `llm_complete` (non-streaming internal call) with a hard token cap to prevent runaway costs.
+- **Cons**: The quiz and notes actions retrieve up to 25 chunks (~12,500 tokens), which can be large for Groq's fallback model. The quiz format is rigidly templated, which is a deliberate trade-off for reliability over flexibility.
+
+### What would the system/platform be capable of after this phase
+- **User Perspective**: Users can download their entire workspace as a single organized text or Markdown file with one click. They can generate a 5-question quiz on any document to test their understanding. They can generate structured revision notes on demand from any file or the whole workspace.

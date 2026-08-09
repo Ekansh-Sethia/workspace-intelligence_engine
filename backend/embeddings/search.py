@@ -98,6 +98,7 @@ class SearchService:
                 chunk_id=hit.payload.get("chunk_id", 0),
                 chunk_index=hit.payload.get("chunk_index", 0),
                 page_number=hit.payload.get("page_number"),
+                chunk_type=hit.payload.get("chunk_type", "text"),
             )
             for hit in result.points
             if hit.score >= MIN_SCORE_THRESHOLD

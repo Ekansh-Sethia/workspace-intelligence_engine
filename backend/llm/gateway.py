@@ -1,13 +1,12 @@
 """
-LLM Gateway — Phase 9
+LLM Gateway — Phase 9/10
 
 Wraps LiteLLM to provide a unified, provider-agnostic interface for all LLM calls.
 
 Design notes
 ------------
 - LiteLLM uses OpenAI-compatible message format universally. Swapping providers
-  means changing the model string (e.g., "gemini/gemini-2.5-flash" →
-  "groq/llama-3.1-70b-versatile") — zero business logic changes.
+  means changing the model string — zero business logic changes.
 
 - Primary model:  Gemini 2.5 Flash  (free tier, large context, vision-capable)
 - Fallback model: Groq Llama 3.1 8B (free tier, extremely fast inference)
@@ -19,6 +18,9 @@ Design notes
 - os.environ is the mechanism LiteLLM uses to pick up API keys. We write them
   once at startup from our Settings object so nothing else in the codebase
   needs to know which env var name each provider expects.
+
+- llm_complete() is a lightweight non-streaming helper for utility calls such
+  as conversational query rewriting, classification, and summarisation tasks.
 """
 import os
 import litellm
@@ -60,6 +62,13 @@ def _build_router() -> Router:
             "model_name": "fallback",
             "litellm_params": {
                 "model": "groq/llama-3.1-8b-instant",
+                "api_key": settings.GROQ_API_KEY or "not-set",
+            },
+        },
+        {
+            "model_name": "fast",
+            "litellm_params": {
+                "model": "groq/llama-3.3-70b-versatile",
                 "api_key": settings.GROQ_API_KEY or "not-set",
             },
         }
@@ -111,3 +120,69 @@ async def llm_chat_stream(
         stream=True,
     )
     return stream
+
+
+async def llm_complete(
+    system_prompt: str,
+    user_message: str,
+    max_tokens: int = 256,
+) -> str:
+    """
+    Send a single non-streaming request to the LLM Gateway and return the
+    full response as a plain string.
+
+    Designed for lightweight utility calls (e.g., query rewriting, classification)
+    where streaming is unnecessary and low latency is preferred.
+
+    Args:
+        system_prompt: The instruction for the LLM.
+        user_message:  The user-facing input to process.
+        max_tokens:    Cap the response length to avoid runaway completions.
+
+    Returns:
+        The LLM's response as a stripped plain string.
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    logger.info("LLMGateway: llm_complete call (non-streaming, using fast model)")
+
+    response = await _router.acompletion(
+        model="fast",
+        messages=messages,
+        stream=False,
+        max_tokens=max_tokens,
+    )
+    content = response.choices[0].message.content
+    return content.strip() if content else ""
+
+
+async def llm_stream(
+    system_prompt: str,
+    user_message: str,
+    max_tokens: int = 1000,
+):
+    """
+    Stream tokens from the LLM Gateway.
+    Yields text tokens as they arrive.
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    logger.info("LLMGateway: llm_stream call")
+
+    response = await _router.acompletion(
+        model="primary",
+        messages=messages,
+        stream=True,
+        max_tokens=max_tokens,
+    )
+    
+    async for chunk in response:
+        token = chunk.choices[0].delta.content or ""
+        if token:
+            yield token

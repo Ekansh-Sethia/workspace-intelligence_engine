@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from core.database import Base
@@ -27,6 +28,14 @@ class Workspace(Base):
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Phase 8 — Metadata Layer
+    summary = Column(Text, nullable=True)           # AI-generated workspace overview
+    keywords = Column(JSONB, nullable=True)          # List[str] of top keywords
+    topics = Column(JSONB, nullable=True)            # List[str] of detected topics
+    document_count = Column(Integer, default=0)     # Total non-image files processed
+    image_count = Column(Integer, default=0)         # Total image files processed
+    total_chunk_count = Column(Integer, default=0)  # Sum of all chunk counts
+
     owner = relationship("User", back_populates="workspaces")
     files = relationship("File", back_populates="workspace", cascade="all, delete-orphan")
 
@@ -44,6 +53,12 @@ class File(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    # Phase 8 — File-level Metadata
+    summary = Column(Text, nullable=True)        # AI-generated summary of this file
+    keywords = Column(JSONB, nullable=True)       # List[str] extracted from this file
+    topics = Column(JSONB, nullable=True)         # List[str] extracted from this file
+    page_count = Column(Integer, nullable=True)  # Number of pages/slides (from parser)
+
     workspace = relationship("Workspace", back_populates="files")
     chunks = relationship("Chunk", back_populates="file", cascade="all, delete-orphan")
 
@@ -56,6 +71,9 @@ class Chunk(Base):
     text = Column(String, nullable=False)
     page_number = Column(Integer, nullable=True) # Optional page or slide number
     token_count = Column(Integer, default=0, nullable=False)
+    # Structural type detected during indexing. Values: 'text', 'answer_key',
+    # 'table', 'toc', 'reference', 'code'. Defaults to 'text' for all legacy chunks.
+    chunk_type = Column(String, nullable=False, default="text", server_default="text")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     file = relationship("File", back_populates="chunks")

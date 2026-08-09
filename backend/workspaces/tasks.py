@@ -4,8 +4,10 @@ from core.database import AsyncSessionLocal, engine
 from workspaces.models import Workspace, WorkspaceStatus, File, FileStatus, Chunk
 import authentication.models  # Required to register User model for SQLAlchemy relationships
 from workspaces.utils import secure_extract, scan_and_process_workspace
+from workspaces.metadata import MetadataService
 from chunking.tokenizer import TiktokenTokenizer
 from chunking.splitter import DocumentChunker
+from chunking.classifier import classify_chunk
 from parsers.factory import get_parser
 from embeddings import FastEmbedProvider
 from embeddings.service import EmbeddingService
@@ -66,7 +68,8 @@ async def parse_and_chunk_workspace_files(workspace_id: int, raw_dir: Path):
                         chunk_index=c["chunk_index"],
                         text=c["text"],
                         page_number=c["page_number"],
-                        token_count=c["token_count"]
+                        token_count=c["token_count"],
+                        chunk_type=classify_chunk(c["text"]),
                     )
                     for c in raw_chunks
                 ]
@@ -131,7 +134,12 @@ async def run_processing(workspace_id: int, zip_file_path: str):
             total_vectors = await service.embed_and_store_workspace(workspace_id, db)
         logger.info(f"Workspace {workspace_id}: {total_vectors} vectors stored in Qdrant")
         
-        # 7. Update status to ready
+        # 7. Generate AI metadata for all files + workspace roll-up (Phase 8)
+        async with AsyncSessionLocal() as db:
+            metadata_service = MetadataService()
+            await metadata_service.generate_for_workspace(workspace_id, db)
+        
+        # 8. Update status to ready
         await update_workspace_status(workspace_id, WorkspaceStatus.READY)
         
         # 8. Cleanup the raw zip file to save space only on success

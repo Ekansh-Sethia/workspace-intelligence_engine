@@ -1,16 +1,18 @@
-from fastapi import APIRouter, Depends, status, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, status, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List
+from typing import List, Optional
 
 from core.database import get_db
 from authentication.dependencies import get_current_user
 from authentication.models import User
 from workspaces.models import Workspace, WorkspaceStatus, File as FileModel
-from workspaces.schemas import WorkspaceResponse, FileResponse
+from workspaces.schemas import WorkspaceResponse, WorkspaceDetailResponse, FileResponse
 from workspaces.search_schemas import SearchQuery, SearchResult
 from workspaces.services import delete_workspace_storage
 from workspaces.tasks import process_workspace_upload
+from workspaces.actions import ActionService
 from embeddings import FastEmbedProvider
 from embeddings.service import EmbeddingService
 from embeddings.search import SearchService
@@ -27,6 +29,53 @@ async def list_workspaces(
 ):
     result = await db.execute(select(Workspace).where(Workspace.owner_id == current_user.id))
     return result.scalars().all()
+
+
+@router.get("/{workspace_id}", response_model=WorkspaceDetailResponse)
+async def get_workspace(
+    workspace_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return full detail for a single workspace, including Phase 8 metadata."""
+    result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id,
+            Workspace.owner_id == current_user.id,
+        )
+    )
+    workspace = result.scalars().first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return workspace
+
+
+@router.get("/{workspace_id}/summary")
+async def get_workspace_summary(
+    workspace_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the AI-generated summary, topics, and keywords for a workspace."""
+    result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id,
+            Workspace.owner_id == current_user.id,
+        )
+    )
+    workspace = result.scalars().first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return {
+        "workspace_id": workspace.id,
+        "name": workspace.name,
+        "summary": workspace.summary,
+        "keywords": workspace.keywords or [],
+        "topics": workspace.topics or [],
+        "document_count": workspace.document_count,
+        "image_count": workspace.image_count,
+        "total_chunk_count": workspace.total_chunk_count,
+    }
 
 @router.post("", response_model=WorkspaceResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_workspace(
@@ -161,4 +210,100 @@ async def search_workspace(
         workspace_id=workspace_id,
         query=body.query,
         limit=body.limit,
+    )
+
+
+# ── Phase 13: Workspace Actions ───────────────────────────────────────────────
+
+@router.get("/{workspace_id}/export")
+async def export_workspace(
+    workspace_id: int,
+    format: str = Query(default="txt", pattern="^(txt|md)$"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Download the entire workspace as a single merged TXT or Markdown file.
+    All text is sourced from parsed+chunked Postgres records.
+    """
+    ws_result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id, Workspace.owner_id == current_user.id
+        )
+    )
+    workspace = ws_result.scalars().first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace.status != "ready":
+        raise HTTPException(status_code=409, detail="Workspace is not ready")
+
+    action_service = ActionService(db=db)
+    content = await action_service.export_workspace(workspace_id, format=format)
+    ext = "md" if format == "md" else "txt"
+    filename = f"{workspace.name.replace(' ', '_')}_export.{ext}"
+    media_type = "text/markdown" if format == "md" else "text/plain"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{workspace_id}/actions/quiz", response_class=StreamingResponse)
+async def generate_quiz(
+    workspace_id: int,
+    file_id: Optional[int] = Query(default=None, description="Specific file ID to quiz on"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate a 5-question MCQ quiz from a file or the whole workspace.
+    Streams the quiz as SSE.
+    """
+    ws_result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id, Workspace.owner_id == current_user.id
+        )
+    )
+    workspace = ws_result.scalars().first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace.status != "ready":
+        raise HTTPException(status_code=409, detail="Workspace is not ready")
+
+    action_service = ActionService(db=db)
+    return StreamingResponse(
+        action_service.generate_quiz(workspace_id, file_id=file_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{workspace_id}/actions/notes", response_class=StreamingResponse)
+async def generate_notes(
+    workspace_id: int,
+    file_id: Optional[int] = Query(default=None, description="Specific file ID to summarise"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate structured revision notes from a file or the whole workspace.
+    Streams the notes as SSE.
+    """
+    ws_result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id, Workspace.owner_id == current_user.id
+        )
+    )
+    workspace = ws_result.scalars().first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace.status != "ready":
+        raise HTTPException(status_code=409, detail="Workspace is not ready")
+
+    action_service = ActionService(db=db)
+    return StreamingResponse(
+        action_service.generate_notes(workspace_id, file_id=file_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

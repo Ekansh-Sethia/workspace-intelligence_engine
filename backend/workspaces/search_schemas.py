@@ -18,3 +18,5 @@ class SearchResult(BaseModel):
     chunk_id: int
     chunk_index: int
     page_number: int | None = None
+    # Structural type detected at index time: 'text', 'answer_key', 'table', etc.
+    chunk_type: str = "text"

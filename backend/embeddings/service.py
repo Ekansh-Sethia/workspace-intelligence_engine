@@ -97,6 +97,7 @@ class EmbeddingService:
                         "chunk_index": chunk.chunk_index,
                         "page_number": chunk.page_number,
                         "text": chunk.text,
+                        "chunk_type": getattr(chunk, "chunk_type", "text"),
                     },
                 )
                 for chunk, vector in zip(batch, vectors)

@@ -11,11 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+import json
 
 from core.database import get_db
 from authentication.dependencies import get_current_user
 from authentication.models import User
-from workspaces.models import Workspace
+from workspaces.models import Workspace, File
 from chat.models import ChatSession, ChatMessage
 from chat.schemas import (
     ChatSessionCreate,
@@ -25,6 +26,9 @@ from chat.schemas import (
     SessionHistoryResponse,
 )
 from chat.rag_service import RAGService
+from chat.intent_router import classify_intent, Intent
+from workspaces.actions import ActionService
+import re
 
 router = APIRouter(prefix="/workspaces", tags=["Chat"])
 
@@ -172,6 +176,8 @@ async def send_message(
     """
     Send a user message and receive a streaming SSE response.
 
+    Phase 9: Every request passes through the Intent Router first.
+
     The response is a text/event-stream with the following event types:
       data: <token>           — incremental LLM token
       data: [SOURCES][...]    — JSON array of chunk_ids used to ground the answer
@@ -180,6 +186,128 @@ async def send_message(
     await _get_owned_ready_workspace(workspace_id, db, current_user)
     await _get_owned_session(session_id, workspace_id, db)
 
+    # ── Phase 9: Intent Classification ────────────────────────────────────
+    # Classify intent dynamically via Groq JSON
+    intent_result = await classify_intent(body.query)
+    intent = intent_result.intent
+    # ── METADATA_SEARCH: serve directly from Postgres, zero LLM calls ────
+    if intent == Intent.METADATA_SEARCH:
+        stmt = select(File).where(File.workspace_id == workspace_id)
+        
+        if intent_result.file_type_filter:
+            if intent_result.file_type_filter.startswith("image/"):
+                stmt = stmt.where(File.mime_type.like("image/%"))
+            else:
+                stmt = stmt.where(File.mime_type == intent_result.file_type_filter)
+            
+        files_result = await db.execute(stmt)
+        files = files_result.scalars().all()
+        file_list = [
+            f"{i+1}. {f.relative_path} ({f.mime_type}, {f.size:,} bytes)"
+            for i, f in enumerate(files)
+        ]
+        response_text = (
+            f"This workspace contains {len(files)} file(s):\n\n"
+            + "\n".join(file_list)
+        ) if files else "No files found in this workspace."
+
+        async def _metadata_stream():
+            yield f"data: {json.dumps(response_text)}\n\n"
+            yield "data: [SOURCES][]\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            _metadata_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # ── SUMMARIZATION: serve from pre-generated Phase 8 metadata ─────────
+    if intent == Intent.SUMMARIZATION:
+        ws_result = await db.execute(
+            select(Workspace).where(Workspace.id == workspace_id)
+        )
+        workspace = ws_result.scalars().first()
+        summary = workspace.summary if workspace else None
+        topics = workspace.topics or [] if workspace else []
+
+        if summary:
+            response_text = (
+                f"Workspace Summary:\n\n{summary}\n\n"
+                f"Topics: {', '.join(topics)}" if topics else f"Workspace Summary:\n\n{summary}"
+            )
+        else:
+            response_text = (
+                "The workspace summary has not been generated yet. "
+                "Please wait for indexing to complete, or ask a specific question about your documents."
+            )
+
+        async def _summary_stream():
+            yield f"data: {json.dumps(response_text)}\n\n"
+            yield "data: [SOURCES][]\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            _summary_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # ── ACTION: stateful action routing (Phase 13 updated) ───────────────
+    if intent == Intent.ACTION:
+        action_service = ActionService(db=db)
+        
+        # Route directly using the LLM-extracted parameter
+        action_type = intent_result.action_type
+        if action_type == "quiz":
+            action_gen = action_service.generate_quiz(workspace_id=workspace_id)
+        elif action_type == "notes":
+            action_gen = action_service.generate_notes(workspace_id=workspace_id)
+        else:
+            action_gen = action_service.generate_notes(workspace_id=workspace_id)
+
+        async def _stateful_action_stream():
+            full_response = ""
+            # Save user message immediately
+            user_msg = ChatMessage(
+                session_id=session_id,
+                role="user",
+                content=body.query,
+                sources=[],
+            )
+            db.add(user_msg)
+            await db.commit()
+
+            async for chunk in action_gen:
+                yield chunk
+                # Extract the text from the SSE "data: ..." format to save to DB
+                if chunk.startswith("data: ") and not chunk.startswith("data: [SOURCES]") and not chunk.startswith("data: [DONE]"):
+                    text = chunk[6:].strip()
+                    if text:
+                        try:
+                            import json
+                            parsed_text = json.loads(text)
+                            full_response += parsed_text + "\n"
+                        except Exception:
+                            full_response += text + "\n"
+
+            # Save assistant message at the end
+            assistant_msg = ChatMessage(
+                session_id=session_id,
+                role="assistant",
+                content=full_response.strip(),
+                sources=[],
+            )
+            db.add(assistant_msg)
+            await db.commit()
+
+        return StreamingResponse(
+            _stateful_action_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # ── SEMANTIC_SEARCH (default): full RAG pipeline ──────────────────────
     rag_service = RAGService(db=db)
 
     return StreamingResponse(
@@ -190,7 +318,6 @@ async def send_message(
         ),
         media_type="text/event-stream",
         headers={
-            # Prevent proxy buffering so tokens reach the client immediately
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
