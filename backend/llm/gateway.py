@@ -61,14 +61,14 @@ def _build_router() -> Router:
         {
             "model_name": "fallback",
             "litellm_params": {
-                "model": "groq/llama-3.1-8b-instant",
+                "model": settings.LLM_FALLBACK_MODEL,
                 "api_key": settings.GROQ_API_KEY or "not-set",
             },
         },
         {
             "model_name": "fast",
             "litellm_params": {
-                "model": "groq/llama-3.3-70b-versatile",
+                "model": settings.LLM_FAST_MODEL,
                 "api_key": settings.GROQ_API_KEY or "not-set",
             },
         }

@@ -21,6 +21,8 @@ class WorkspaceResponse(BaseModel):
     document_count: int = 0
     image_count: int = 0
     total_chunk_count: int = 0
+    # Computed at query time — total number of files in the workspace
+    file_count: Optional[int] = None
 
     model_config = {"from_attributes": True}
 

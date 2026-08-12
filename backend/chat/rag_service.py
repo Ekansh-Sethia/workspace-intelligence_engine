@@ -231,9 +231,9 @@ Each chunk is labelled with the source filename and its structural type.
 STRICT RULES:
 1. Only use information from the provided context chunks to answer.
 2. STRICT GROUNDING: You MUST NOT use your internal knowledge to answer the question.
-   If the provided context chunks do not contain the exact answer (or the answer key)
-   for the user's question, you must reply: "The provided context does not contain
-   the answer to this question." Do not attempt to guess or calculate the answer yourself.
+   If the provided context chunks do not contain the exact answer for the user's question,
+   you must reply: "The provided context does not contain the answer to this question."
+   Do not attempt to guess or calculate the answer yourself.
 3. Never make up facts, URLs, code, or names that are not present in the context.
 4. Be concise and clear. Format your response as plain text with clear spacing and
    bullet points. Do NOT use markdown bold (**text**) or headers.
@@ -243,6 +243,15 @@ STRICT RULES:
    unrelated topics. DO NOT mix options, answers, or text from different questions.
    If the user asks about a specific question, isolate that specific question and
    ignore all others.
+
+QUIZ GRADING EXCEPTION:
+If the user is submitting answers to a quiz that was generated earlier in the chat
+history, you MUST act as a teacher and grade their answers. To do this:
+- Read the quiz questions and the Answer Key from the chat history.
+- Compare the user's answers to the Answer Key.
+- Tell the user which of their answers are correct and which are wrong, and briefly
+  explain the correct answer for any they got wrong using the explanations in the Answer Key.
+- You do NOT need to rely on the context chunks for grading, because the correct answers are already in the chat history.
 
 CONTEXT CHUNKS:
 {context}
@@ -293,9 +302,21 @@ def _build_system_prompt(chunks: list[SearchResult], file_names: dict[int, str])
             "relevant information in this workspace for their question."
         )
         
-    # We no longer need arbitrary truncation here because we control the total 
-    # context size by restricting the initial search limit to 3 hits per query.
-    return _SYSTEM_PROMPT_TEMPLATE.format(context=_format_chunks(chunks, file_names))
+    # We must enforce MAX_CONTEXT_CHUNKS to prevent token explosion for fallback models.
+    # Prioritize answer keys (vital for grading), then highest-scoring semantic hits.
+    answer_keys = [c for c in chunks if c.chunk_type == "answer_key"]
+    others = [c for c in chunks if c.chunk_type != "answer_key"]
+    
+    # Sort others by score descending (siblings and agentic hits might have score=0, 
+    # but initial hits have real cosine scores).
+    others.sort(key=lambda c: c.score, reverse=True)
+    
+    capped_chunks = (answer_keys + others)[:MAX_CONTEXT_CHUNKS]
+    
+    # Re-sort capped chunks sequentially by file and index to maintain reading flow
+    capped_chunks.sort(key=lambda c: (c.file_id, c.chunk_index))
+
+    return _SYSTEM_PROMPT_TEMPLATE.format(context=_format_chunks(capped_chunks, file_names))
 
 
 def _build_history_messages(session_messages: list[ChatMessage]) -> list[dict]:

@@ -22,6 +22,7 @@ from qdrant_client.models import (
     Distance,
     VectorParams,
     PayloadSchemaType,
+    OptimizersConfigDiff,
 )
 
 from utils.config import settings
@@ -57,10 +58,21 @@ def init_qdrant() -> None:
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+            # Lower indexing_threshold so HNSW index builds immediately even for
+            # small development workspaces instead of the default 10,000 threshold.
+            optimizers_config=OptimizersConfigDiff(indexing_threshold=500),
         )
         logger.info(f"Qdrant: collection '{COLLECTION_NAME}' created")
     else:
         logger.info(f"Qdrant: collection '{COLLECTION_NAME}' already exists — skipping creation")
+        # Patch threshold on existing collection too (idempotent)
+        try:
+            client.update_collection(
+                collection_name=COLLECTION_NAME,
+                optimizer_config=OptimizersConfigDiff(indexing_threshold=500),
+            )
+        except Exception:
+            pass
 
     # Create payload indexes for efficient filtered search
     _ensure_payload_index(client, "workspace_id", PayloadSchemaType.INTEGER)

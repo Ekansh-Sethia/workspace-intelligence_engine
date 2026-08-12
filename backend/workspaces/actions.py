@@ -30,8 +30,10 @@ _QUIZ_SYSTEM = (
     "Format each question exactly like this:\n"
     "Q1. [Question text]\n"
     "(A) [Option A]\n(B) [Option B]\n(C) [Option C]\n(D) [Option D]\n\n"
-    "Generate all 5 questions in this format. Do NOT provide the correct answers. "
-    "Do not add any other text or explanation."
+    "Rules:\n"
+    "1. Do NOT generate questions that rely on images, diagrams, or visual figures.\n"
+    "2. Ensure there is exactly ONE correct answer per question.\n"
+    "3. After generating all 5 questions, you MUST provide an Answer Key separated by a horizontal rule (---), listing the correct option and a 1-sentence explanation for each."
 )
 
 _NOTES_SYSTEM = (

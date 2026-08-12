@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, status, HTTPException, UploadFile, File,
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func
 from typing import List, Optional
 
 from core.database import get_db
@@ -47,6 +48,12 @@ async def get_workspace(
     workspace = result.scalars().first()
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
+    
+    # Compute file_count dynamically so it is always accurate
+    count_result = await db.execute(
+        select(func.count(FileModel.id)).where(FileModel.workspace_id == workspace_id)
+    )
+    workspace.file_count = count_result.scalar() or 0
     return workspace
 
 

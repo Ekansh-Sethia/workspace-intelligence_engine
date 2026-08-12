@@ -19,7 +19,10 @@ from utils.config import settings
 # Setup Caption Provider if GROQ_API_KEY is available
 caption_provider = None
 if settings.GROQ_API_KEY:
-    caption_provider = GroqCaptionProvider(api_key=settings.GROQ_API_KEY)
+    caption_provider = GroqCaptionProvider(
+        api_key=settings.GROQ_API_KEY,
+        model_name=settings.LLM_VISION_MODEL,
+    )
 
 # Singleton instances — parsers are stateless, so a single instance is fine.
 _text_parser = TextParser()

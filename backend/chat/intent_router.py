@@ -49,10 +49,11 @@ _LLM_CLASSIFIER_SYSTEM = (
     "  \"action_type\": \"quiz\" | \"notes\" | \"export\" | null\n"
     "}\n\n"
     "Intents:\n"
-    "- metadata_search: Query to list, count, or find files in the workspace.\n"
-    "- summarization: Request to summarise the workspace or a file.\n"
-    "- action: Request to perform a workspace action (e.g. generate a quiz, notes, export).\n"
-    "- semantic_search: General knowledge question (default fallback).\n\n"
+    "- metadata_search: Query explicitly asking to list, count, or find files in the workspace.\n"
+    "- summarization: Request to summarise or describe the workspace or a file. This includes 'tell me about this workspace', 'what is this workspace about', 'describe this', 'give me an overview'.\n"
+    "- action: Request to perform a workspace action. This includes generating any kind of quiz, test, assessment, flashcards, or Q&A cards (action_type='quiz'), and generating study notes, summaries, revision materials, or cheat sheets (action_type='notes').\n"
+    "- semantic_search: General knowledge question, conversational replies, verifying/grading quiz answers, or anything else (default fallback).\n\n"
+    "CRITICAL: If the user is answering a quiz, submitting answers, or asking to verify/grade their responses, you MUST classify it as semantic_search.\n\n"
     "Provide ONLY the raw JSON object. No markdown formatting, no explanation."
 )
 
