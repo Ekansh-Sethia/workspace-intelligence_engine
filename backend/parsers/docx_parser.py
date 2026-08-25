@@ -15,14 +15,15 @@ from utils.logger import logger
 class DocxParser(BaseParser):
     """Handles .docx files."""
 
-    def parse(self, filepath: Path, source_path: Optional[str] = None) -> Document:
+    def parse(self, file_content: bytes, filename: str, source_path: Optional[str] = None) -> Document:
         """
         Extract text from every paragraph of a DOCX file.
 
         Tables and embedded objects are intentionally skipped in V1 —
         only paragraph text is extracted.
         """
-        doc = DocxDocument(str(filepath))
+        import io
+        doc = DocxDocument(io.BytesIO(file_content))
         paragraphs: list[str] = []
 
         for para in doc.paragraphs:
@@ -31,7 +32,7 @@ class DocxParser(BaseParser):
                 paragraphs.append(text)
 
         full_text = "\n\n".join(paragraphs)
-        rel = source_path or filepath.name
+        rel = source_path or filename
 
         # Gather core properties if available
         meta: dict = {"parser": "DocxParser"}
@@ -47,7 +48,7 @@ class DocxParser(BaseParser):
         logger.info(f"DocxParser: parsed '{rel}' ({len(paragraphs)} paragraphs, {len(full_text)} chars)")
 
         return Document(
-            filename=filepath.name,
+            filename=filename,
             source_path=rel,
             text=full_text,
             page_count=1,  # DOCX doesn't expose page count without rendering

@@ -43,15 +43,16 @@ def test_list_workspaces():
     
     app.dependency_overrides.clear()
 
-@pytest.mark.parametrize("scenario, file_content, expected_status", [
-    ("valid_zip", create_dummy_zip().read(), 202),
-    ("empty_payload", b"", 400),
-    ("corrupt_zip_garbage_bytes", b"this is not a zip file", 400),
-    ("text_file_disguised_as_zip", b"just some text", 400),
-    ("valid_zip_multiple_files", create_dummy_zip({"a.txt": "a", "b.pdf": "b"}).read(), 202),
-    ("oversized_file", b"0" * (51 * 1024 * 1024), 400)
-])
-def test_upload_workspace_generalized(scenario, file_content, expected_status, monkeypatch):
+@pytest.mark.parametrize("scenario, file_content_func, expected_status", [
+    ("valid_zip", lambda: create_dummy_zip().read(), 202),
+    ("empty_payload", lambda: b"", 400),
+    ("corrupt_zip_garbage_bytes", lambda: b"this is not a zip file", 400),
+    ("text_file_disguised_as_zip", lambda: b"just some text", 400),
+    ("valid_zip_multiple_files", lambda: create_dummy_zip({"a.txt": "a", "b.pdf": "b"}).read(), 202),
+    ("oversized_file", lambda: b"0" * (51 * 1024 * 1024), 400)
+], ids=["valid", "empty", "corrupt", "text_disguised", "valid_multiple", "oversized"])
+def test_upload_workspace_generalized(scenario, file_content_func, expected_status, monkeypatch):
+    file_content = file_content_func()
     from authentication.dependencies import get_current_user
     from core.database import get_db
     from unittest.mock import AsyncMock, MagicMock
@@ -64,11 +65,15 @@ def test_upload_workspace_generalized(scenario, file_content, expected_status, m
     
     # Mock db
     mock_session = AsyncMock()
+    mock_session.add = MagicMock()
     
     # Give the workspace an ID and created_at during refresh
     async def mock_refresh(instance):
         instance.id = 999
         instance.created_at = datetime.now(UTC)
+        instance.document_count = 0
+        instance.image_count = 0
+        instance.total_chunk_count = 0
     mock_session.refresh = mock_refresh
     
     app.dependency_overrides[get_current_user] = get_mock_user_override

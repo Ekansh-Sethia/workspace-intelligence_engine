@@ -11,7 +11,6 @@ from authentication.models import User
 from workspaces.models import Workspace, WorkspaceStatus, File as FileModel
 from workspaces.schemas import WorkspaceResponse, WorkspaceDetailResponse, FileResponse
 from workspaces.search_schemas import SearchQuery, SearchResult
-from workspaces.services import delete_workspace_storage
 from workspaces.tasks import process_workspace_upload
 from workspaces.actions import ActionService
 from embeddings import FastEmbedProvider
@@ -120,22 +119,61 @@ async def create_workspace(
     db.add(new_workspace)
     await db.commit()
     await db.refresh(new_workspace)
-    
-    # Save the raw ZIP file temporarily for the worker
-    ws_dir = Path("local_storage") / str(new_workspace.id)
-    os.makedirs(ws_dir, exist_ok=True)
-    zip_path = ws_dir / "archive.zip"
+    import zipfile
+    import io
+    import hashlib
+    import mimetypes
+    from utils.logger import logger
     
     try:
-        with open(zip_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # Read the raw ZIP bytes
+        file.file.seek(0)
+        zip_bytes = file.file.read()
+        
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+            for zip_info in z.infolist():
+                if zip_info.is_dir():
+                    continue
+                
+                # Protect against Zip Slip in memory
+                if ".." in zip_info.filename or zip_info.filename.startswith("/") or zip_info.filename.startswith("\\"):
+                    continue
+                
+                # Ignore macOS __MACOSX directories and hidden files
+                if "__MACOSX" in zip_info.filename or os.path.basename(zip_info.filename).startswith("."):
+                    continue
+                
+                # Extract file contents
+                file_content = z.read(zip_info.filename)
+                
+                # Calculate file hash
+                file_hash = hashlib.sha256(file_content).hexdigest()
+                
+                # Guess mime type
+                mime_type, _ = mimetypes.guess_type(zip_info.filename)
+                if not mime_type:
+                    mime_type = "application/octet-stream"
+                
+                # Create File record
+                new_file = FileModel(
+                    workspace_id=new_workspace.id,
+                    relative_path=zip_info.filename,
+                    file_hash=file_hash,
+                    content=file_content,
+                    mime_type=mime_type,
+                    size=len(file_content)
+                )
+                db.add(new_file)
+        
+        await db.commit()
     except Exception as e:
+        logger.error(f"Failed to process zip in-memory: {e}")
         await db.delete(new_workspace)
         await db.commit()
         raise HTTPException(status_code=500, detail="Failed to save file for processing")
         
-    # Trigger Celery Task (Pass the file path, not the File object)
-    process_workspace_upload.delay(new_workspace.id, str(zip_path))
+    # Trigger Celery Task (Pass workspace_id only, no disk paths)
+    process_workspace_upload.delay(new_workspace.id)
     
     return new_workspace
 
@@ -154,9 +192,6 @@ async def delete_workspace(
     # Delete from DB (cascade rules will handle relations if any)
     await db.delete(workspace)
     await db.commit()
-    
-    # Delete local files
-    delete_workspace_storage(workspace.id)
     
     # Delete vectors from Qdrant (best-effort, don't fail if Qdrant is unavailable)
     try:

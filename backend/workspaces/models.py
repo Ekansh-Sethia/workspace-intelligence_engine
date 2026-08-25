@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Text, LargeBinary
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -46,6 +46,7 @@ class File(Base):
     workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
     relative_path = Column(String, nullable=False, index=True)
     file_hash = Column(String, nullable=False, index=True)
+    content = Column(LargeBinary, nullable=False)
     mime_type = Column(String, nullable=False)
     size = Column(Integer, nullable=False) # Size in bytes
     status = Column(String, default=FileStatus.PENDING)

@@ -7,6 +7,7 @@ from alembic import context
 from core.database import Base
 from authentication.models import User
 from workspaces.models import Workspace
+from chat.models import ChatSession, ChatMessage
 from utils.config import settings
 
 config = context.config

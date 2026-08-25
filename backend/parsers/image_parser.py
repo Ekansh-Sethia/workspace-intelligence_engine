@@ -50,7 +50,7 @@ class CaptionProvider(ABC):
     """
 
     @abstractmethod
-    def caption(self, image_path: Path) -> str:
+    def caption(self, file_content: bytes, filename: str) -> str:
         """Return a natural-language caption for the image."""
         ...
 
@@ -68,9 +68,8 @@ class GroqCaptionProvider(CaptionProvider):
         self.client = Groq(api_key=api_key)
         self.model_name = model_name
 
-    def _encode_image(self, image_path: Path) -> str:
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode('utf-8')
+    def _encode_image(self, file_content: bytes) -> str:
+        return base64.b64encode(file_content).decode('utf-8')
 
     @retry(
         stop=stop_after_attempt(5),
@@ -78,12 +77,12 @@ class GroqCaptionProvider(CaptionProvider):
         retry=retry_if_exception_type((RateLimitError, InternalServerError)),
         reraise=True
     )
-    def caption(self, image_path: Path) -> str:
-        logger.info(f"GroqCaptionProvider: Generating caption for {image_path.name}")
-        base64_image = self._encode_image(image_path)
+    def caption(self, file_content: bytes, filename: str) -> str:
+        logger.info(f"GroqCaptionProvider: Generating caption for {filename}")
+        base64_image = self._encode_image(file_content)
         
         # Determine mime type based on extension
-        ext = image_path.suffix.lower()
+        ext = Path(filename).suffix.lower()
         mime_type = f"image/{ext[1:]}" if ext in ['.png', '.jpeg', '.webp', '.gif'] else "image/jpeg"
 
         messages = [
@@ -131,14 +130,15 @@ class ImageParser(BaseParser):
     def __init__(self, caption_provider: Optional[CaptionProvider] = None):
         self._caption_provider = caption_provider
 
-    def parse(self, filepath: Path, source_path: Optional[str] = None) -> Document:
+    def parse(self, file_content: bytes, filename: str, source_path: Optional[str] = None) -> Document:
         """
         Run OCR on the image and optionally generate a caption.
         """
-        image = Image.open(filepath)
+        import io
+        image = Image.open(io.BytesIO(file_content))
         ocr_text = pytesseract.image_to_string(image).strip()
 
-        rel = source_path or filepath.name
+        rel = source_path or filename
         meta: dict = {
             "parser": "ImageParser",
             "width": image.width,
@@ -149,7 +149,7 @@ class ImageParser(BaseParser):
         # Future: call caption provider if available
         if self._caption_provider is not None:
             try:
-                caption = self._caption_provider.caption(filepath)
+                caption = self._caption_provider.caption(file_content, filename)
                 meta["caption"] = caption
             except Exception as exc:
                 logger.warning(f"ImageParser: captioning failed for '{rel}': {exc}")
@@ -160,7 +160,7 @@ class ImageParser(BaseParser):
         logger.info(f"ImageParser: parsed '{rel}' ({image.width}x{image.height}, {len(ocr_text)} chars OCR)")
 
         return Document(
-            filename=filepath.name,
+            filename=filename,
             source_path=rel,
             text=ocr_text,
             page_count=1,

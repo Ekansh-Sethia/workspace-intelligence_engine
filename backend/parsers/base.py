@@ -42,13 +42,14 @@ class BaseParser(ABC):
     """
 
     @abstractmethod
-    def parse(self, filepath: Path, source_path: Optional[str] = None) -> Document:
+    def parse(self, file_content: bytes, filename: str, source_path: Optional[str] = None) -> Document:
         """
         Parse a single file and return a Document.
 
         Args:
-            filepath:    Absolute path to the file on disk.
-            source_path: Relative path within the workspace (used for metadata).
+            file_content: The raw bytes of the file.
+            filename:     Original file name.
+            source_path:  Relative path within the workspace (used for metadata).
 
         Returns:
             A Document instance containing the extracted text.

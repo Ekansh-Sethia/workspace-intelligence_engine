@@ -19,14 +19,17 @@ from utils.logger import logger
 class PdfParser(BaseParser):
     """Handles .pdf files."""
 
-    def parse(self, filepath: Path, source_path: Optional[str] = None) -> Document:
+    def parse(self, file_content: bytes, filename: str, source_path: Optional[str] = None) -> Document:
         """
         Extract text from every page of a PDF.
 
         Raises ValueError if the PDF is unreadable or contains zero
         extractable text (e.g. scanned images with no OCR layer).
         """
-        reader = PdfReader(filepath)
+        import io
+        from pdf2image import convert_from_bytes
+        
+        reader = PdfReader(io.BytesIO(file_content))
         pages_text: list[str] = []
 
         for page in reader.pages:
@@ -36,7 +39,7 @@ class PdfParser(BaseParser):
 
         text = "\n\n".join(pages_text)
         page_count = len(reader.pages)
-        rel = source_path or filepath.name
+        rel = source_path or filename
 
         # If pypdf extracted almost nothing, it's likely a scanned PDF.
         # Fallback to OCR via pdf2image + pytesseract.
@@ -46,8 +49,8 @@ class PdfParser(BaseParser):
             
             # Use a temporary directory for images to avoid memory spikes
             with tempfile.TemporaryDirectory() as temp_dir:
-                # convert_from_path returns a list of PIL Images
-                images = convert_from_path(filepath, output_folder=temp_dir, dpi=200)
+                # convert_from_bytes returns a list of PIL Images
+                images = convert_from_bytes(file_content, output_folder=temp_dir, dpi=200)
                 page_count = len(images)
                 
                 # Parallelize OCR using ThreadPoolExecutor
@@ -81,7 +84,7 @@ class PdfParser(BaseParser):
             logger.info(f"PdfParser: parsed '{rel}' ({page_count} pages, {len(text)} chars)")
 
         return Document(
-            filename=filepath.name,
+            filename=filename,
             source_path=rel,
             text=text,
             page_count=page_count,

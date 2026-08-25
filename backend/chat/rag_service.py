@@ -233,6 +233,7 @@ STRICT RULES:
 2. STRICT GROUNDING: You MUST NOT use your internal knowledge to answer the question.
    If the provided context chunks do not contain the exact answer for the user's question,
    you must reply: "The provided context does not contain the answer to this question."
+   (EXCEPTION: If you are grading a quiz, you MUST use the Answer Key from the chat history instead of the context chunks).
    Do not attempt to guess or calculate the answer yourself.
 3. Never make up facts, URLs, code, or names that are not present in the context.
 4. Be concise and clear. Format your response as plain text with clear spacing and
@@ -296,11 +297,8 @@ def _format_chunks(chunks: list[SearchResult], file_names: dict[int, str]) -> st
 def _build_system_prompt(chunks: list[SearchResult], file_names: dict[int, str]) -> str:
     """Build the grounded system prompt with filename-annotated context chunks."""
     if not chunks:
-        return (
-            "You are a helpful AI assistant. The semantic search returned no relevant "
-            "context for this query. Inform the user politely that you could not find "
-            "relevant information in this workspace for their question."
-        )
+        context_str = "No relevant context chunks were found for this query."
+        return _SYSTEM_PROMPT_TEMPLATE.format(context=context_str)
         
     # We must enforce MAX_CONTEXT_CHUNKS to prevent token explosion for fallback models.
     # Prioritize answer keys (vital for grading), then highest-scoring semantic hits.

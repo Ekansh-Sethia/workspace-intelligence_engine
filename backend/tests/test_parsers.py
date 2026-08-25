@@ -66,7 +66,7 @@ def test_text_parser_valid(tmp_workspace, ext, content, expected_substring):
     filepath.write_text(content, encoding="utf-8")
 
     parser = TextParser()
-    doc = parser.parse(filepath, source_path=f"sample{ext}")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path=f"sample{ext}")
 
     assert isinstance(doc, Document)
     assert expected_substring in doc.text
@@ -79,7 +79,7 @@ def test_text_parser_empty_file(tmp_workspace):
     filepath.write_text("", encoding="utf-8")
 
     parser = TextParser()
-    doc = parser.parse(filepath, source_path="empty.txt")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="empty.txt")
     assert doc.text == ""
 
 
@@ -89,7 +89,7 @@ def test_text_parser_latin1_fallback(tmp_workspace):
     filepath.write_bytes(b"\xe9\xe8\xea")  # é è ê in latin-1
 
     parser = TextParser()
-    doc = parser.parse(filepath, source_path="latin.txt")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="latin.txt")
     assert len(doc.text) == 3  # Three decoded characters
 
 
@@ -142,12 +142,19 @@ def _create_minimal_pdf(filepath: Path, text: str = "Hello PDF"):
         writer.write(f)
 
 
-def test_pdf_parser_valid(tmp_workspace):
+@patch("pdf2image.convert_from_bytes")
+@patch("parsers.pdf_parser.pytesseract.image_to_string")
+def test_pdf_parser_valid(mock_image_to_string, mock_convert, tmp_workspace):
+    from PIL import Image
+    # Mock returning one blank image page
+    mock_convert.return_value = [Image.new("RGB", (100, 100), color="white")]
+    mock_image_to_string.return_value = "Hello PDF"
+    
     filepath = tmp_workspace / "sample.pdf"
     _create_minimal_pdf(filepath, "Hello PDF")
 
     parser = PdfParser()
-    doc = parser.parse(filepath, source_path="sample.pdf")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="sample.pdf")
 
     assert isinstance(doc, Document)
     assert doc.page_count >= 1
@@ -160,7 +167,7 @@ def test_pdf_parser_corrupt(tmp_workspace):
 
     parser = PdfParser()
     with pytest.raises(Exception):
-        parser.parse(filepath)
+        parser.parse(filepath.read_bytes(), filename=filepath.name)
 
 
 # ------------------------------------------------------------------
@@ -179,7 +186,7 @@ def test_docx_parser_valid(tmp_workspace):
     _create_minimal_docx(filepath, "Hello DOCX")
 
     parser = DocxParser()
-    doc = parser.parse(filepath, source_path="sample.docx")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="sample.docx")
 
     assert isinstance(doc, Document)
     assert "Hello DOCX" in doc.text
@@ -191,7 +198,7 @@ def test_docx_parser_empty(tmp_workspace):
     _create_minimal_docx(filepath, "")
 
     parser = DocxParser()
-    doc = parser.parse(filepath, source_path="empty.docx")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="empty.docx")
     assert doc.text == ""
 
 
@@ -201,7 +208,7 @@ def test_docx_parser_corrupt(tmp_workspace):
 
     parser = DocxParser()
     with pytest.raises(Exception):
-        parser.parse(filepath)
+        parser.parse(filepath.read_bytes(), filename=filepath.name)
 
 
 # ------------------------------------------------------------------
@@ -227,7 +234,7 @@ def test_pptx_parser_valid(tmp_workspace):
     _create_minimal_pptx(filepath, ["Slide One", "Slide Two"])
 
     parser = PptxParser()
-    doc = parser.parse(filepath, source_path="sample.pptx")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="sample.pptx")
 
     assert isinstance(doc, Document)
     assert "Slide One" in doc.text
@@ -241,7 +248,7 @@ def test_pptx_parser_empty(tmp_workspace):
     _create_minimal_pptx(filepath, [""])
 
     parser = PptxParser()
-    doc = parser.parse(filepath, source_path="empty.pptx")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="empty.pptx")
     assert doc.text.strip() == ""
 
 
@@ -251,23 +258,25 @@ def test_pptx_parser_corrupt(tmp_workspace):
 
     parser = PptxParser()
     with pytest.raises(Exception):
-        parser.parse(filepath)
+        parser.parse(filepath.read_bytes(), filename=filepath.name)
 
 
 # ------------------------------------------------------------------
 # ImageParser (OCR via pytesseract)
 # ------------------------------------------------------------------
 
-def test_image_parser_valid(tmp_workspace):
+@patch("parsers.image_parser.pytesseract.image_to_string")
+def test_image_parser_valid(mock_ocr, tmp_workspace):
     """Create a simple white image and run OCR (expect empty or minimal text)."""
     from PIL import Image
+    mock_ocr.return_value = "Mocked OCR text"
 
     filepath = tmp_workspace / "blank.png"
     img = Image.new("RGB", (100, 100), color="white")
     img.save(str(filepath))
 
     parser = ImageParser()
-    doc = parser.parse(filepath, source_path="blank.png")
+    doc = parser.parse(filepath.read_bytes(), filename=filepath.name, source_path="blank.png")
 
     assert isinstance(doc, Document)
     assert doc.metadata["parser"] == "ImageParser"
@@ -281,7 +290,7 @@ def test_image_parser_corrupt(tmp_workspace):
 
     parser = ImageParser()
     with pytest.raises(Exception):
-        parser.parse(filepath)
+        parser.parse(filepath.read_bytes(), filename=filepath.name)
 
 
 def test_image_parser_caption_provider_extension():
