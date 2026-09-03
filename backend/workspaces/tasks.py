@@ -122,15 +122,41 @@ async def run_processing(workspace_id: int):
         # Crucial: Close all database connections tied to this event loop
         await engine.dispose()
 
+import threading
+from utils.config import settings
+
 @celery_app.task(bind=True, max_retries=3)
-def process_workspace_upload(self, workspace_id: int):
+def _celery_process_workspace_upload(self, workspace_id: int):
     """
     Celery task to parse the workspace files directly from the database in the background.
     """
-    logger.info(f"Starting background processing for workspace {workspace_id}")
+    logger.info(f"Starting Celery background processing for workspace {workspace_id}")
     
     exc = asyncio.run(run_processing(workspace_id))
     
     # Retry with exponential backoff if it wasn't a validation error
     if exc is not None and not isinstance(exc, ValueError):
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+
+
+class _TaskDispatcher:
+    def __init__(self, celery_task):
+        self._celery_task = celery_task
+
+    def delay(self, workspace_id: int):
+        if getattr(settings, "RUN_CELERY_IN_PROCESS", True):
+            logger.info(f"Dispatching workspace {workspace_id} processing to in-process background thread")
+            thread = threading.Thread(
+                target=lambda: asyncio.run(run_processing(workspace_id)),
+                daemon=True,
+                name=f"workspace-processor-{workspace_id}",
+            )
+            thread.start()
+            return None
+        return self._celery_task.delay(workspace_id)
+
+    def __call__(self, *args, **kwargs):
+        return self._celery_task(*args, **kwargs)
+
+
+process_workspace_upload = _TaskDispatcher(_celery_process_workspace_upload)

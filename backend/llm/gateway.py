@@ -31,6 +31,7 @@ from utils.logger import logger
 # ── silence LiteLLM's overly verbose success logs ──────────────────────────
 litellm.success_callback = []
 litellm.set_verbose = False
+litellm.suppress_debug_info = True
 
 
 def _inject_api_keys() -> None:

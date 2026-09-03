@@ -8,8 +8,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://wie_user:wie_password@localhost:5432/wie_db"
 
 
-    # Redis
+    # Redis / Tasks
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
+    RUN_CELERY_IN_PROCESS: bool = True
     
     # Qdrant
     QDRANT_URL: str = "http://localhost:6333"
