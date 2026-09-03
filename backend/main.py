@@ -16,7 +16,11 @@ import chat.models  # noqa: F401
 async def lifespan(app: FastAPI):
     """Run startup tasks before serving requests."""
     logger.info("Application startup: initialising Qdrant...")
-    init_qdrant()
+    try:
+        init_qdrant()
+        logger.info("Application startup: Qdrant initialised successfully.")
+    except Exception as exc:
+        logger.warning(f"Application startup: Qdrant initialisation warning (non-fatal): {exc}")
     logger.info("Application startup complete.")
     yield
     logger.info("Application shutdown.")
@@ -29,10 +33,12 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Set all CORS enabled origins
+    # Set all CORS enabled origins (allow localhost and any Vercel deployment)
+    origins = [settings.FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.FRONTEND_URL, "http://127.0.0.1:3000"],
+        allow_origins=origins,
+        allow_origin_regex=r"https://.*\.vercel\.app",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
