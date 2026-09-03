@@ -34,8 +34,11 @@ RUN pip install --no-cache /wheels/*
 # Copy application code
 COPY . .
 
+# Make start.sh executable
+RUN chmod +x ./start.sh
+
 # Expose port
 EXPOSE 8000
 
-# Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Command to run migrations, worker, and FastAPI server
+CMD ["./start.sh"]

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     
     # Qdrant
     QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_API_KEY: str | None = None
     
     # Auth
     SECRET_KEY: str = "your-super-secret-key-change-in-production"
