@@ -38,7 +38,9 @@ def get_qdrant_client() -> QdrantClient:
     """Return the singleton QdrantClient, creating it on first call."""
     global _client
     if _client is None:
-        _client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
+        api_key = settings.QDRANT_API_KEY.strip() if settings.QDRANT_API_KEY and settings.QDRANT_API_KEY.strip() else None
+        url = settings.QDRANT_URL.strip().rstrip("/") if settings.QDRANT_URL else "http://localhost:6333"
+        _client = QdrantClient(url=url, api_key=api_key)
     return _client
 
 
