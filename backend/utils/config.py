@@ -7,18 +7,7 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql://wie_user:wie_password@localhost:5432/wie_db"
 
-    @property
-    def ASYNC_DATABASE_URL(self) -> str:
-        url = self.DATABASE_URL
-        if url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        elif url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-        # asyncpg does not accept 'sslmode', it requires 'ssl'
-        url = url.replace("sslmode=", "ssl=")
-        return url
 
-    
     # Redis
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
     
