@@ -119,8 +119,9 @@ async def run_processing(workspace_id: int):
         await update_workspace_status(workspace_id, WorkspaceStatus.FAILED)
         return exc
     finally:
-        # Crucial: Close all database connections tied to this event loop
-        await engine.dispose()
+        # Only dispose engine if running as an isolated Celery worker process
+        if not getattr(settings, "RUN_CELERY_IN_PROCESS", True):
+            await engine.dispose()
 
 import threading
 from utils.config import settings
@@ -145,13 +146,13 @@ class _TaskDispatcher:
 
     def delay(self, workspace_id: int):
         if getattr(settings, "RUN_CELERY_IN_PROCESS", True):
-            logger.info(f"Dispatching workspace {workspace_id} processing to in-process background thread")
-            thread = threading.Thread(
-                target=lambda: asyncio.run(run_processing(workspace_id)),
-                daemon=True,
-                name=f"workspace-processor-{workspace_id}",
-            )
-            thread.start()
+            logger.info(f"Dispatching workspace {workspace_id} processing to in-process task")
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(run_processing(workspace_id))
+            except RuntimeError:
+                # If called synchronously outside an active event loop
+                asyncio.run(run_processing(workspace_id))
             return None
         return self._celery_task.delay(workspace_id)
 
