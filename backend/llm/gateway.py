@@ -21,17 +21,18 @@ Design notes
 
 - llm_complete() is a lightweight non-streaming helper for utility calls such
   as conversational query rewriting, classification, and summarisation tasks.
+
+Memory optimisation
+-------------------
+- `import litellm` is deferred to the first LLM call via `_get_router()`.
+  LiteLLM's cost-table and model-metadata loading adds ~183 MB to startup RSS
+  on the Render 512 MB Free Tier. By importing lazily, idle server RAM is
+  ~170 MB lower. The first actual call (metadata generation or chat) incurs
+  the import cost exactly once and caches the Router singleton thereafter.
 """
 import os
-import litellm
-from litellm import Router
 from utils.config import settings
 from utils.logger import logger
-
-# ── silence LiteLLM's overly verbose success logs ──────────────────────────
-litellm.success_callback = []
-litellm.set_verbose = False
-litellm.suppress_debug_info = True
 
 
 def _inject_api_keys() -> None:
@@ -42,7 +43,7 @@ def _inject_api_keys() -> None:
         os.environ["GEMINI_API_KEY"] = settings.GEMINI_API_KEY
 
 
-def _build_router() -> Router:
+def _build_router():
     """
     Build a LiteLLM Router with primary + fallback model configuration.
 
@@ -51,6 +52,8 @@ def _build_router() -> Router:
     - Fallback to the next model on rate-limit or permanent errors
     - Per-model timeout and retry settings
     """
+    from litellm import Router  # deferred — avoids ~183 MB at startup
+
     model_list = [
         {
             "model_name": "primary",
@@ -72,7 +75,7 @@ def _build_router() -> Router:
                 "model": settings.LLM_FAST_MODEL,
                 "api_key": settings.GROQ_API_KEY or "not-set",
             },
-        }
+        },
     ]
 
     router = Router(
@@ -85,15 +88,36 @@ def _build_router() -> Router:
     return router
 
 
-# Module-level singleton — created once, reused across all requests
-_inject_api_keys()
-_router: Router = _build_router()
+# Lazy singleton — None until the first LLM call initialises it
+_router = None
+
+
+def _get_router():
+    """
+    Return the singleton LiteLLM Router, creating it on the first call.
+
+    This defers the expensive litellm import (and its ~183 MB cost tables)
+    until an actual LLM call is made, rather than at server startup.
+    """
+    global _router
+    if _router is None:
+        import litellm  # noqa: F401 — must import before Router to configure callbacks
+
+        # Silence LiteLLM's overly verbose success logs
+        litellm.success_callback = []
+        litellm.set_verbose = False
+        litellm.suppress_debug_info = True
+
+        _inject_api_keys()
+        _router = _build_router()
+        logger.info("LLMGateway: Router initialised (lazy, first use)")
+    return _router
 
 
 async def llm_chat_stream(
     system_prompt: str,
     messages: list[dict],
-) -> litellm.CustomStreamWrapper:
+):
     """
     Send a chat request to the LLM Gateway and return an async streaming iterator.
 
@@ -115,7 +139,7 @@ async def llm_chat_stream(
         f"'{settings.LLM_PRIMARY_MODEL}'"
     )
 
-    stream = await _router.acompletion(
+    stream = await _get_router().acompletion(
         model="primary",
         messages=full_messages,
         stream=True,
@@ -150,7 +174,7 @@ async def llm_complete(
 
     logger.info("LLMGateway: llm_complete call (non-streaming, using fast model)")
 
-    response = await _router.acompletion(
+    response = await _get_router().acompletion(
         model="fast",
         messages=messages,
         stream=False,
@@ -176,13 +200,13 @@ async def llm_stream(
 
     logger.info("LLMGateway: llm_stream call")
 
-    response = await _router.acompletion(
+    response = await _get_router().acompletion(
         model="primary",
         messages=messages,
         stream=True,
         max_tokens=max_tokens,
     )
-    
+
     async for chunk in response:
         token = chunk.choices[0].delta.content or ""
         if token:

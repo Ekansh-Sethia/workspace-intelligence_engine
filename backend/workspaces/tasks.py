@@ -112,11 +112,19 @@ async def run_processing(workspace_id: int):
         await parse_and_chunk_workspace_files(workspace_id)
         
         # 2. Generate embeddings and store in Qdrant
+        import gc
         provider = FastEmbedProvider()
         service = EmbeddingService(provider=provider)
         async with AsyncSessionLocal() as db:
             total_vectors = await service.embed_and_store_workspace(workspace_id, db)
         logger.info(f"Workspace {workspace_id}: {total_vectors} vectors stored in Qdrant")
+
+        # Free the ONNX model from RAM immediately — it is no longer needed.
+        # Search queries instantiate a fresh FastEmbedProvider() at query time.
+        # This reclaims ~140 MB on the 512 MB Render Free Tier.
+        del service
+        del provider
+        gc.collect()
         
         # 3. Generate AI metadata for all files + workspace roll-up
         async with AsyncSessionLocal() as db:

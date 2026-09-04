@@ -40,7 +40,7 @@ from sqlalchemy.future import select
 from chat.models import ChatSession, ChatMessage
 from embeddings.search import SearchService
 from embeddings import FastEmbedProvider
-from llm.gateway import llm_chat_stream, llm_complete, _router
+from llm.gateway import llm_chat_stream, llm_complete, _get_router
 from utils.config import settings
 from utils.logger import logger
 from workspaces.models import Chunk, File
@@ -419,7 +419,7 @@ class RAGService:
                 messages_for_agent.append({"role": "system", "content": context_message})
 
             try:
-                agent_response = await _router.acompletion(
+                agent_response = await _get_router().acompletion(
                     model="primary",
                     messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
                     tools=[_SEARCH_TOOL],
