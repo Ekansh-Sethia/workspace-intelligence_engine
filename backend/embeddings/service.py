@@ -45,8 +45,8 @@ class EmbeddingService:
 
     async def embed_and_store_workspace(self, workspace_id: int, db: AsyncSession) -> int:
         """
-        Fetch all CHUNKED file records for a workspace, generate embeddings,
-        and upsert them into Qdrant.
+        Fetch chunks in bounded batches for a workspace, generate embeddings,
+        and upsert them into Qdrant without holding all chunks in RAM.
 
         Args:
             workspace_id: The workspace whose chunks should be vectorised.
@@ -55,37 +55,42 @@ class EmbeddingService:
         Returns:
             The total number of vectors upserted.
         """
-        # 1. Fetch all chunks for this workspace via File join
+        import gc
+
+        # 1. Fetch only chunk IDs to avoid loading thousands of ORM text objects at once
         result = await db.execute(
-            select(Chunk)
+            select(Chunk.id)
             .join(File, Chunk.file_id == File.id)
             .where(File.workspace_id == workspace_id)
+            .order_by(Chunk.id)
         )
-        chunks: List[Chunk] = result.scalars().all()
+        chunk_ids: List[int] = result.scalars().all()
 
-        if not chunks:
+        if not chunk_ids:
             logger.warning(f"EmbeddingService: no chunks found for workspace {workspace_id}")
             return 0
 
         logger.info(
-            f"EmbeddingService: embedding {len(chunks)} chunks for workspace {workspace_id} "
-            f"using '{self._provider.model_name}'"
+            f"EmbeddingService: embedding {len(chunk_ids)} chunks for workspace {workspace_id} "
+            f"using '{self._provider.model_name}' (batch size {self._batch_size})"
         )
 
         client = get_qdrant_client()
         total_upserted = 0
 
-        # 2. Process in batches to bound memory usage
-        for batch_start in range(0, len(chunks), self._batch_size):
-            batch = chunks[batch_start: batch_start + self._batch_size]
+        # 2. Process in bounded batches, fetching full records only for the current batch
+        for batch_start in range(0, len(chunk_ids), self._batch_size):
+            batch_ids = chunk_ids[batch_start: batch_start + self._batch_size]
+            batch_res = await db.execute(
+                select(Chunk).where(Chunk.id.in_(batch_ids)).order_by(Chunk.id)
+            )
+            batch = batch_res.scalars().all()
             texts = [chunk.text for chunk in batch]
 
             # 3. Generate vectors via the injected provider
             vectors = self._provider.embed_batch(texts)
 
             # 4. Build Qdrant PointStructs
-            #    Payload stores enough metadata for the retrieval layer to
-            #    reconstruct context without hitting Postgres on every query.
             points = [
                 PointStruct(
                     id=chunk.id,
@@ -107,9 +112,13 @@ class EmbeddingService:
             client.upsert(collection_name=COLLECTION_NAME, points=points)
             total_upserted += len(points)
 
+            # Explicitly free batch memory
+            del points, vectors, texts, batch
+            gc.collect()
+
             logger.info(
                 f"EmbeddingService: upserted batch {batch_start // self._batch_size + 1} "
-                f"({len(points)} vectors) for workspace {workspace_id}"
+                f"({len(batch_ids)} vectors) for workspace {workspace_id}"
             )
 
         logger.info(

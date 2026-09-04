@@ -26,35 +26,46 @@ async def parse_and_chunk_workspace_files(workspace_id: int):
     """
     Parse and chunk every extracted file in the workspace directly from DB.
 
-    Each file is parsed and chunked independently. 
+    Processed one file at a time to keep memory usage minimal (crucial for 512MB free tier).
     On success, the file status becomes CHUNKED; on failure it becomes FAILED.
     """
-    
+    import gc
     tokenizer = TiktokenTokenizer()
     chunker = DocumentChunker(tokenizer=tokenizer)
+
+    # 1. Fetch only the IDs of pending files (avoids loading all binary contents into RAM at once)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(File).where(
+            select(File.id).where(
                 File.workspace_id == workspace_id,
                 File.status == FileStatus.PENDING,
             )
         )
-        files = result.scalars().all()
+        file_ids = result.scalars().all()
 
-        parsed_count = 0
-        failed_count = 0
+    parsed_count = 0
+    failed_count = 0
 
-        for file_record in files:
+    # 2. Process one file at a time, committing and freeing memory immediately
+    for file_id in file_ids:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(File).where(File.id == file_id))
+            file_record = result.scalar_one_or_none()
+            if not file_record:
+                continue
+
             ext = Path(file_record.relative_path).suffix.lower()
 
             try:
                 parser = get_parser(ext)
-                # Pass raw bytes directly from the database to the parser
-                doc = parser.parse(file_content=file_record.content, filename=file_record.relative_path, source_path=file_record.relative_path)
-                
-                # Immediately chunk the document while text is in memory
+                doc = parser.parse(
+                    file_content=file_record.content,
+                    filename=file_record.relative_path,
+                    source_path=file_record.relative_path,
+                )
+
                 raw_chunks = chunker.chunk_document(doc)
-                
+
                 db_chunks = [
                     Chunk(
                         file_id=file_record.id,
@@ -66,7 +77,7 @@ async def parse_and_chunk_workspace_files(workspace_id: int):
                     )
                     for c in raw_chunks
                 ]
-                
+
                 db.add_all(db_chunks)
                 file_record.chunk_count = len(db_chunks)
                 file_record.status = FileStatus.CHUNKED
@@ -82,11 +93,15 @@ async def parse_and_chunk_workspace_files(workspace_id: int):
                     f"Failed to parse '{file_record.relative_path}': {exc}"
                 )
 
-        await db.commit()
-        logger.info(
-            f"Workspace {workspace_id} parse/chunk complete: "
-            f"{parsed_count} succeeded, {failed_count} failed"
-        )
+            await db.commit()
+
+        # Free memory immediately after each file is processed
+        gc.collect()
+
+    logger.info(
+        f"Workspace {workspace_id} parse/chunk complete: "
+        f"{parsed_count} succeeded, {failed_count} failed"
+    )
 
 async def run_processing(workspace_id: int):
     try:

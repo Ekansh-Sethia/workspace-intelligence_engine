@@ -91,12 +91,12 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # 50MB size limit check (approx)
+    # 10MB size limit check (protects against memory exhaustion on 512MB instances)
     file.file.seek(0, 2)
     file_size = file.file.tell()
     file.file.seek(0)
-    if file_size > 50 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large. Maximum size is 50MB.")
+    if file_size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
         
     if file_size == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
