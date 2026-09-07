@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { setToken, setRefreshToken } from '@/lib/auth';
+import { Logo } from '@/components/Logo';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
@@ -49,9 +50,10 @@ export default function LoginPage() {
 
     return (
         <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-[#e8efe6]">
-            <div className="text-center mb-8">
+            <div className="text-center mb-8 flex flex-col items-center">
+                <Logo size={36} className="mb-4" />
                 <h1 className="text-2xl font-semibold tracking-tight text-[#2d372c]">Welcome Back</h1>
-                <p className="text-sm text-[#7a8c78] mt-2">Sign in to your workspace</p>
+                <p className="text-sm text-[#7a8c78] mt-1.5">Sign in to ContextIQ</p>
             </div>
             
             <form onSubmit={handleLogin} className="space-y-5">

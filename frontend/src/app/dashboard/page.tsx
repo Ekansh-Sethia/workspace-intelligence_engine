@@ -6,6 +6,7 @@ import { isAuthenticated, removeToken } from '@/lib/auth';
 import { fetchWithAuth } from '@/lib/api';
 import { WorkspaceCard } from '@/components/WorkspaceCard';
 import { UploadModal } from '@/components/UploadModal';
+import { Logo } from '@/components/Logo';
 
 export default function DashboardPage() {
     const router = useRouter();
@@ -79,7 +80,7 @@ export default function DashboardPage() {
     return (
         <div className="min-h-screen bg-[#f7f9f6] text-[#333333]">
             <header className="bg-white border-b border-[#e8efe6] px-8 py-4 flex justify-between items-center sticky top-0 z-10">
-                <h1 className="text-xl font-semibold text-[#2d372c]">Workspace Intelligence Engine</h1>
+                <Logo />
                 <button
                     onClick={handleLogout}
                     className="px-4 py-2 text-sm font-medium text-[#7a8c78] hover:text-[#2d372c] transition-colors"

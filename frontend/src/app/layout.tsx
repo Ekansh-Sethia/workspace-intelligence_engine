@@ -13,8 +13,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Workspace Intelligence Engine",
-  description: "Manage and query your workspaces.",
+  title: "ContextIQ — Workspace Intelligence Engine",
+  description: "Multimodal AI knowledge engine. Manage, search, and interrogate your workspace documents with agentic retrieval.",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+    ],
+  },
 };
 
 export default function RootLayout({

@@ -7,7 +7,7 @@ client = TestClient(app)
 def test_health_check():
     response = client.get(f"{settings.API_V1_STR}/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "message": "Workspace Intelligence Engine is running"}
+    assert response.json() == {"status": "ok", "message": "ContextIQ is running"}
 
 def test_root():
     response = client.get("/")

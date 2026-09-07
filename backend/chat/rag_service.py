@@ -222,7 +222,7 @@ async def _fetch_file_names(file_ids: list[int], db: AsyncSession) -> dict[int, 
 
 # ── System Prompt Builder ──────────────────────────────────────────────────
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are a precise, helpful AI assistant for the Workspace Intelligence Engine.
+You are a precise, helpful AI assistant for ContextIQ.
 
 You are answering questions about a specific workspace. You have been given a set
 of relevant document excerpts (context chunks) retrieved from that workspace.
