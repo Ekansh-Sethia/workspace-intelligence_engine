@@ -113,6 +113,7 @@ async def run_processing(workspace_id: int):
         
         # 2. Generate embeddings and store in Qdrant
         import gc
+        import ctypes
         provider = FastEmbedProvider()
         service = EmbeddingService(provider=provider)
         async with AsyncSessionLocal() as db:
@@ -122,9 +123,20 @@ async def run_processing(workspace_id: int):
         # Free the ONNX model from RAM immediately — it is no longer needed.
         # Search queries instantiate a fresh FastEmbedProvider() at query time.
         # This reclaims ~140 MB on the 512 MB Render Free Tier.
+        provider.unload()
         del service
         del provider
         gc.collect()
+        # Force glibc to return freed heap pages to the OS kernel.
+        # gc.collect() alone is insufficient on Linux — glibc holds onto pages
+        # indefinitely unless explicitly told to release them via malloc_trim.
+        # Without this, the ~140 MB ONNX heap persists and causes OOM when
+        # the LiteLLM metadata step runs immediately after.
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+            logger.info("Workspace %s: malloc_trim(0) succeeded — heap returned to OS", workspace_id)
+        except Exception as _mt_err:
+            logger.debug("malloc_trim not available (non-Linux env): %s", _mt_err)
         
         # 3. Generate AI metadata for all files + workspace roll-up
         async with AsyncSessionLocal() as db:

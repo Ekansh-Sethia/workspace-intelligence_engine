@@ -80,7 +80,10 @@ def _build_router():
 
     router = Router(
         model_list=model_list,
-        fallbacks=[{"primary": ["fallback"]}],
+        fallbacks=[
+            {"primary": ["fallback"]},
+            {"fast": ["primary", "fallback"]},
+        ],
         num_retries=2,
         retry_after=1,
         timeout=60,

@@ -70,3 +70,23 @@ class FastEmbedProvider(EmbeddingProvider):
         # fastembed.embed() is a generator — consume it fully with list()
         embeddings = list(model.embed(texts))
         return [emb.tolist() for emb in embeddings]
+
+    def unload(self) -> None:
+        """
+        Explicitly release the ONNX InferenceSession from memory.
+
+        FastEmbed holds a reference to an ONNX Runtime InferenceSession which
+        keeps ~130-140 MB of native (non-GC) memory alive. Setting ``self._model``
+        to ``None`` alone is not enough because Python's reference-counting GC
+        does not control the native ONNX allocations. This method drops the Python
+        reference so the subsequent ``gc.collect()`` + ``malloc_trim(0)`` call in
+        the Celery task can return those pages to the OS before the LLM step runs.
+        """
+        if self._model is not None:
+            # Drop the internal ONNX session object first
+            try:
+                del self._model.model  # fastembed stores the onnxruntime session here
+            except AttributeError:
+                pass
+            self._model = None
+            logger.info("FastEmbedProvider: ONNX model unloaded from memory")
