@@ -230,12 +230,6 @@ Output:
 * `POST /api/v1/workspaces/{id}/chat/sessions` — Create a new conversation session
 * `POST /api/v1/workspaces/{id}/chat/sessions/{session_id}/messages` — Send a query and receive a streaming SSE response with citations
 
----
-
-## 📄 License
-
----
-
 <div align="center">
   <sub>Built by <b>Ekansh Sethia</b></sub>
 </div>
