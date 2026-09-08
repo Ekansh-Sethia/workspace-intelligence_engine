@@ -419,14 +419,27 @@ class RAGService:
                 messages_for_agent.append({"role": "system", "content": context_message})
 
             try:
-                agent_response = await _get_router().acompletion(
-                    model="primary",
-                    messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
-                    tools=[_SEARCH_TOOL],
-                    tool_choice="auto",
-                    stream=False,
-                    max_tokens=512,
-                )
+                try:
+                    agent_response = await _get_router().acompletion(
+                        model="primary",
+                        messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
+                        tools=[_SEARCH_TOOL],
+                        tool_choice="auto",
+                        stream=False,
+                        max_tokens=512,
+                    )
+                except Exception as _agent_err:
+                    logger.warning(
+                        f"RAGService: primary agent call failed ({_agent_err}), trying fallback model"
+                    )
+                    agent_response = await _get_router().acompletion(
+                        model="fallback",
+                        messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
+                        tools=[_SEARCH_TOOL],
+                        tool_choice="auto",
+                        stream=False,
+                        max_tokens=512,
+                    )
 
                 choice = agent_response.choices[0]
 
@@ -453,13 +466,11 @@ class RAGService:
                     # Merge deduplicated results into the growing context
                     for nc in new_chunks:
                         if nc.chunk_id not in all_chunk_ids:
-                            chunks.append(nc)
                             all_chunk_ids.add(nc.chunk_id)
-
-                    # Re-fetch filenames for any new files
-                    new_file_ids = [nc.file_id for nc in new_chunks if nc.file_id not in file_names]
-                    if new_file_ids:
-                        file_names.update(await _fetch_file_names(new_file_ids, self._db))
+                            chunks.append(nc)
+                            if nc.file_id not in file_names:
+                                new_name = await _fetch_file_names([nc.file_id], self._db)
+                                file_names.update(new_name)
 
                     chunks.sort(key=lambda c: (c.file_id, c.chunk_index))
 
@@ -482,6 +493,13 @@ class RAGService:
         # 6.5 Free ONNX model before LLM streaming starts to keep RAM under 200MB during generation
         try:
             self._search_service._provider.unload()
+        except Exception:
+            pass
+        import gc
+        import ctypes
+        gc.collect()
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
         except Exception:
             pass
 

@@ -124,30 +124,52 @@ async def llm_chat_stream(
     """
     Send a chat request to the LLM Gateway and return an async streaming iterator.
 
-    The caller is responsible for iterating over the returned stream and
-    yielding each token chunk. On provider failure, LiteLLM's Router
-    transparently retries and falls back to the secondary provider.
+    Transparently falls back to secondary provider (Groq) if primary (Gemini)
+    encounters rate limits, quota exhaustion (HTTP 429 / RESOURCE_EXHAUSTED),
+    or any provider failure.
 
     Args:
         system_prompt: The grounding system instruction for the LLM.
         messages:      OpenAI-format message list: [{"role": "user"|"assistant", "content": str}]
 
     Returns:
-        An async streaming response object. Iterate over it to get chunks.
+        An async streaming response object yielding LiteLLM delta chunks.
     """
     full_messages = [{"role": "system", "content": system_prompt}] + messages
+    router = _get_router()
 
-    logger.info(
-        f"LLMGateway: sending {len(messages)} message(s) to primary model "
-        f"'{settings.LLM_PRIMARY_MODEL}'"
-    )
+    candidates = ["primary", "fallback"]
+    for candidate in candidates:
+        try:
+            logger.info(f"LLMGateway: attempting stream with model '{candidate}'")
+            stream = await router.acompletion(
+                model=candidate,
+                messages=full_messages,
+                stream=True,
+            )
+            # Peek/verify first chunk to ensure connection and quota are valid.
+            # If Google API raises 429 RESOURCE_EXHAUSTED or VertexAIError on the first chunk,
+            # it is caught right here so we can seamlessly fall back to Groq!
+            first_chunk = await stream.__anext__()
 
-    stream = await _get_router().acompletion(
-        model="primary",
-        messages=full_messages,
-        stream=True,
-    )
-    return stream
+            async def _stream_wrapper(f_chunk, rest_stream):
+                yield f_chunk
+                async for chunk in rest_stream:
+                    yield chunk
+
+            return _stream_wrapper(first_chunk, stream)
+        except StopAsyncIteration:
+            async def _empty():
+                if False:
+                    yield
+            return _empty()
+        except Exception as exc:
+            logger.warning(
+                f"LLMGateway: stream with model '{candidate}' failed ({type(exc).__name__}: {exc})"
+            )
+            if candidate == candidates[-1]:
+                raise
+            logger.info("LLMGateway: attempting fallback model...")
 
 
 async def llm_complete(
