@@ -88,4 +88,11 @@ class FastEmbedProvider(EmbeddingProvider):
                 pass
             _shared_model = None
             _shared_model_name = None
-            logger.info("FastEmbedProvider: shared ONNX model unloaded from memory")
+            import gc
+            gc.collect()
+            try:
+                import ctypes
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
+            logger.info("FastEmbedProvider: shared ONNX model unloaded from memory and heap trimmed")

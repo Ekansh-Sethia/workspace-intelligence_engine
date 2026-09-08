@@ -166,6 +166,22 @@ async def create_workspace(
                 db.add(new_file)
         
         await db.commit()
+        # Expunge all objects from session and free raw bytes immediately
+        try:
+            import inspect
+            _exp = db.expunge_all()
+            if inspect.isawaitable(_exp):
+                await _exp
+        except Exception:
+            pass
+        del zip_bytes
+        import gc
+        gc.collect()
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Failed to process zip in-memory: {e}")
         await db.delete(new_workspace)

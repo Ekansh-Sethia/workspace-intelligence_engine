@@ -97,6 +97,11 @@ async def parse_and_chunk_workspace_files(workspace_id: int):
 
         # Free memory immediately after each file is processed
         gc.collect()
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
     logger.info(
         f"Workspace {workspace_id} parse/chunk complete: "

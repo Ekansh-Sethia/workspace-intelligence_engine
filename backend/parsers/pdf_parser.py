@@ -78,6 +78,10 @@ class PdfParser(BaseParser):
             if reader.metadata.author:
                 meta["author"] = reader.metadata.author
 
+        del reader, pages_text
+        import gc
+        gc.collect()
+
         if not text.strip():
             logger.warning(f"PdfParser: '{rel}' has no extractable text even after OCR")
         else:

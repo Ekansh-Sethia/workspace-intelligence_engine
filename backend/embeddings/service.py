@@ -115,6 +115,11 @@ class EmbeddingService:
             # Explicitly free batch memory
             del points, vectors, texts, batch
             gc.collect()
+            try:
+                import ctypes
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
 
             logger.info(
                 f"EmbeddingService: upserted batch {batch_start // self._batch_size + 1} "

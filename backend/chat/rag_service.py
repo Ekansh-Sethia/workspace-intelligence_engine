@@ -479,6 +479,12 @@ class RAGService:
                 logger.warning(f"RAGService: agentic iteration {iteration} failed ({exc}), proceeding with current context")
                 break
 
+        # 6.5 Free ONNX model before LLM streaming starts to keep RAM under 200MB during generation
+        try:
+            self._search_service._provider.unload()
+        except Exception:
+            pass
+
         # 7. Persist user message
         user_message = ChatMessage(
             session_id=session_id,
@@ -542,6 +548,10 @@ class RAGService:
         )
 
         # Free memory immediately after stream finishes
+        try:
+            self._search_service._provider.unload()
+        except Exception:
+            pass
         import gc
         import ctypes
         gc.collect()

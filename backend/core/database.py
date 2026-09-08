@@ -6,7 +6,14 @@ from utils.db_url import make_async_url, make_connect_args
 _async_url = make_async_url(settings.DATABASE_URL)
 _connect_args = make_connect_args(settings.DATABASE_URL)
 
-engine = create_async_engine(_async_url, connect_args=_connect_args, echo=False)
+engine = create_async_engine(
+    _async_url,
+    connect_args=_connect_args,
+    echo=False,
+    pool_size=5,
+    max_overflow=5,
+    pool_recycle=300,
+)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 Base = declarative_base()
