@@ -25,14 +25,16 @@ from utils.logger import logger
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 VECTOR_SIZE = 384
 
+_shared_model: TextEmbedding | None = None
+_shared_model_name: str | None = None
+
 
 class FastEmbedProvider(EmbeddingProvider):
     """
     EmbeddingProvider that uses FastEmbed (ONNX) for local inference.
 
-    The model is loaded lazily on first use and cached for the lifetime of
-    the process. In the Celery worker this means it is loaded once per
-    worker process and reused across tasks.
+    The model is loaded lazily on first use and cached as a shared singleton
+    for the lifetime of the process to avoid duplicate ONNX sessions.
 
     Args:
         model_name: The HuggingFace model identifier to use.
@@ -40,15 +42,18 @@ class FastEmbedProvider(EmbeddingProvider):
 
     def __init__(self, model_name: str = DEFAULT_MODEL):
         self._model_name = model_name
-        self._model: TextEmbedding | None = None
 
     def _load_model(self) -> TextEmbedding:
-        """Lazy-load the model on first call with single-threaded low-memory footprint."""
-        if self._model is None:
-            logger.info(f"FastEmbedProvider: loading model '{self._model_name}' (threads=1)")
-            self._model = TextEmbedding(model_name=self._model_name, threads=1)
+        """Lazy-load the singleton model on first call with single-threaded low-memory footprint."""
+        global _shared_model, _shared_model_name
+        if _shared_model is None or _shared_model_name != self._model_name:
+            if _shared_model is not None:
+                self.unload()
+            logger.info(f"FastEmbedProvider: loading shared model '{self._model_name}' (threads=1)")
+            _shared_model = TextEmbedding(model_name=self._model_name, threads=1)
+            _shared_model_name = self._model_name
             logger.info(f"FastEmbedProvider: model '{self._model_name}' ready")
-        return self._model
+        return _shared_model
 
     @property
     def vector_size(self) -> int:
@@ -73,20 +78,14 @@ class FastEmbedProvider(EmbeddingProvider):
 
     def unload(self) -> None:
         """
-        Explicitly release the ONNX InferenceSession from memory.
-
-        FastEmbed holds a reference to an ONNX Runtime InferenceSession which
-        keeps ~130-140 MB of native (non-GC) memory alive. Setting ``self._model``
-        to ``None`` alone is not enough because Python's reference-counting GC
-        does not control the native ONNX allocations. This method drops the Python
-        reference so the subsequent ``gc.collect()`` + ``malloc_trim(0)`` call in
-        the Celery task can return those pages to the OS before the LLM step runs.
+        Explicitly release the shared ONNX InferenceSession from memory.
         """
-        if self._model is not None:
-            # Drop the internal ONNX session object first
+        global _shared_model, _shared_model_name
+        if _shared_model is not None:
             try:
-                del self._model.model  # fastembed stores the onnxruntime session here
-            except AttributeError:
+                del _shared_model.model
+            except Exception:
                 pass
-            self._model = None
-            logger.info("FastEmbedProvider: ONNX model unloaded from memory")
+            _shared_model = None
+            _shared_model_name = None
+            logger.info("FastEmbedProvider: shared ONNX model unloaded from memory")

@@ -540,3 +540,12 @@ class RAGService:
             f"RAGService: completed turn for session={session_id}, "
             f"tokens≈{len(full_response_text.split())}, sources={source_ids}"
         )
+
+        # Free memory immediately after stream finishes
+        import gc
+        import ctypes
+        gc.collect()
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
