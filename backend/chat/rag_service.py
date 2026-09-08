@@ -516,7 +516,7 @@ class RAGService:
                     yield f"data: {json.dumps(delta)}\n\n"
         except Exception as exc:
             logger.error(f"RAGService: LLM streaming error: {exc}")
-            error_text = "I'm sorry, I encountered an error while generating a response. Please try again."
+            error_text = f"LLM error: {type(exc).__name__} - {exc}"
             full_response_text = error_text
             yield f"data: {json.dumps(error_text)}\n\n"
 
