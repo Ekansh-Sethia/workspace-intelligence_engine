@@ -26,7 +26,7 @@ from embeddings.base import EmbeddingProvider
 from workspaces.models import Chunk, File
 from utils.logger import logger
 
-DEFAULT_BATCH_SIZE = 32
+DEFAULT_BATCH_SIZE = 8
 
 
 class EmbeddingService:

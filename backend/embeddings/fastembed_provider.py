@@ -22,7 +22,7 @@ from fastembed import TextEmbedding
 from embeddings.base import EmbeddingProvider
 from utils.logger import logger
 
-DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 VECTOR_SIZE = 384
 
 
@@ -43,10 +43,10 @@ class FastEmbedProvider(EmbeddingProvider):
         self._model: TextEmbedding | None = None
 
     def _load_model(self) -> TextEmbedding:
-        """Lazy-load the model on first call."""
+        """Lazy-load the model on first call with single-threaded low-memory footprint."""
         if self._model is None:
-            logger.info(f"FastEmbedProvider: loading model '{self._model_name}'")
-            self._model = TextEmbedding(model_name=self._model_name)
+            logger.info(f"FastEmbedProvider: loading model '{self._model_name}' (threads=1)")
+            self._model = TextEmbedding(model_name=self._model_name, threads=1)
             logger.info(f"FastEmbedProvider: model '{self._model_name}' ready")
         return self._model
 
