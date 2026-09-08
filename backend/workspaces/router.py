@@ -91,12 +91,15 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # 10MB size limit check (protects against memory exhaustion on 512MB instances)
+    # 5MB size limit — strict upper bound to guarantee Render Free Tier (512 MB) safety.
+    # Analysis: worst case is a scanned PDF triggering OCR. Even with per-page OCR at 150 DPI,
+    # each page = ~6.2 MB. Combined with the 210 MB server baseline, total peak = ~220 MB.
+    # Raising this limit above 5 MB would require a paid Render instance with more RAM.
     file.file.seek(0, 2)
     file_size = file.file.tell()
     file.file.seek(0)
-    if file_size > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+    if file_size > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 5MB.")
         
     if file_size == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")

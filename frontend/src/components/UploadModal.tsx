@@ -21,8 +21,8 @@ export function UploadModal({ isOpen, onClose, onSuccess }: { isOpen: boolean, o
             return;
         }
 
-        if (file.size > 10 * 1024 * 1024) {
-            setError("File too large. Maximum allowed size is 10MB.");
+        if (file.size > 5 * 1024 * 1024) {
+            setError("File too large. Maximum allowed size is 5MB.");
             return;
         }
 
@@ -113,7 +113,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: { isOpen: boolean, o
                             ) : (
                                 <div>
                                     <p className="text-sm font-medium text-[#3d4c3c]">Click to browse</p>
-                                    <p className="text-xs text-[#7a8c78] mt-1">Maximum file size: 10MB</p>
+                                    <p className="text-xs text-[#7a8c78] mt-1">Maximum file size: 5MB</p>
                                 </div>
                             )}
                         </div>

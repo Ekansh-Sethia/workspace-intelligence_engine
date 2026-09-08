@@ -143,10 +143,10 @@ def _create_minimal_pdf(filepath: Path, text: str = "Hello PDF"):
 
 
 @patch("pdf2image.convert_from_bytes")
-@patch("parsers.pdf_parser.pytesseract.image_to_string")
+@patch("pytesseract.image_to_string")
 def test_pdf_parser_valid(mock_image_to_string, mock_convert, tmp_workspace):
     from PIL import Image
-    # Mock returning one blank image page
+    # Mock returning one blank image page (only used if OCR branch is triggered)
     mock_convert.return_value = [Image.new("RGB", (100, 100), color="white")]
     mock_image_to_string.return_value = "Hello PDF"
     
