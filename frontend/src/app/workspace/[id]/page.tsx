@@ -155,23 +155,26 @@ export default function WorkspacePage() {
     const handleDeleteSession = useCallback(async (sessionId: number) => {
         if (!confirm('Are you sure you want to delete this chat session?')) return;
         
+        // Optimistic UI: remove immediately
+        setSessions(prev => prev.filter(s => s.id !== sessionId));
+        if (activeSessionId === sessionId) {
+            setActiveSessionId(null);
+            setMessages([]);
+        }
+
         try {
             const res = await fetchWithAuth(
                 `/api/v1/workspaces/${workspaceId}/chat/sessions/${sessionId}`,
                 { method: 'DELETE' }
             );
-            if (res.ok) {
-                // Update local state
-                setSessions(prev => prev.filter(s => s.id !== sessionId));
-                if (activeSessionId === sessionId) {
-                    setActiveSessionId(null);
-                    setMessages([]);
-                }
+            if (!res.ok) {
+                fetchSessions();
             }
         } catch (err) {
+            fetchSessions();
             console.error('Failed to delete session', err);
         }
-    }, [workspaceId, activeSessionId]);
+    }, [workspaceId, activeSessionId, fetchSessions]);
 
     // ── Create new chat session ────────────────────────────────────────────
     const handleNewChat = useCallback(async () => {

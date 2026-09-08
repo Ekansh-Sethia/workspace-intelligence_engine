@@ -94,6 +94,8 @@ async def parse_and_chunk_workspace_files(workspace_id: int):
                 )
 
             await db.commit()
+            # Yield control to event loop so other requests are not blocked
+            await asyncio.sleep(0)
 
         # Free memory immediately after each file is processed
         gc.collect()

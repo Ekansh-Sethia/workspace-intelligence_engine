@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     
     # Models
     LLM_PRIMARY_MODEL: str = "gemini/gemini-3.5-flash"
-    LLM_FALLBACK_MODEL: str = "groq/llama-3.3-70b-versatile"
+    LLM_FALLBACK_MODEL: str = "groq/llama-3.1-8b-instant"
     LLM_FAST_MODEL: str = "groq/llama-3.1-8b-instant"
     LLM_VISION_MODEL: str = "llama-3.2-11b-vision-preview"
 

@@ -59,16 +59,19 @@ export default function DashboardPage() {
     const handleDelete = async (id: number) => {
         if (!confirm('Are you sure you want to delete this workspace? This cannot be undone.')) return;
 
+        // Optimistic UI: remove immediately so UI feels instant
+        setWorkspaces(prev => prev.filter(ws => ws.id !== id));
+
         try {
             const res = await fetchWithAuth(`/api/v1/workspaces/${id}`, {
                 method: 'DELETE'
             });
-            if (res.ok) {
+            if (!res.ok) {
                 fetchWorkspaces();
-            } else {
                 alert("Failed to delete workspace");
             }
         } catch (err) {
+            fetchWorkspaces();
             console.error("Failed to delete workspace", err);
         }
     };

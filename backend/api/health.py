@@ -30,3 +30,28 @@ async def health_check():
         "primary_model": settings.LLM_PRIMARY_MODEL,
         "memory": _get_proc_memory(),
     }
+
+@router.get("/health/llm-test", status_code=200)
+async def health_llm_test():
+    import urllib.request
+    import urllib.error
+    results = {
+        "gemini_prefix": (settings.GEMINI_API_KEY or "")[:6],
+        "groq_prefix": (settings.GROQ_API_KEY or "")[:6],
+    }
+    gkey = (settings.GROQ_API_KEY or "").strip("\"' \r\n\t")
+    if gkey:
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {gkey}"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                results["groq"] = f"HTTP {r.status} OK"
+        except urllib.error.HTTPError as e:
+            results["groq"] = f"HTTP {e.code}: {e.read().decode()[:150]}"
+        except Exception as exc:
+            results["groq"] = f"Error: {exc}"
+    else:
+        results["groq"] = "No key"
+    return results

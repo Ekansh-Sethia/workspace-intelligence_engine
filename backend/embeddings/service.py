@@ -125,6 +125,9 @@ class EmbeddingService:
                 f"EmbeddingService: upserted batch {batch_start // self._batch_size + 1} "
                 f"({len(batch_ids)} vectors) for workspace {workspace_id}"
             )
+            # Yield control to event loop so other HTTP requests are processed promptly
+            import asyncio
+            await asyncio.sleep(0)
 
         logger.info(
             f"EmbeddingService: workspace {workspace_id} fully indexed "
@@ -132,12 +135,13 @@ class EmbeddingService:
         )
         return total_upserted
 
-    def delete_workspace_vectors(self, workspace_id: int) -> None:
+    @staticmethod
+    def delete_workspace_vectors(workspace_id: int) -> None:
         """
         Remove all Qdrant vectors whose payload ``workspace_id`` matches.
 
         Called when a workspace is deleted so that the vector store does
-        not accumulate orphaned points.
+        not accumulate orphaned points. No embedding model is needed.
         """
         from qdrant_client.models import Filter, FieldCondition, MatchValue
 

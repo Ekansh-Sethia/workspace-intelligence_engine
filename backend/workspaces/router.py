@@ -212,10 +212,10 @@ async def delete_workspace(
     await db.delete(workspace)
     await db.commit()
     
-    # Delete vectors from Qdrant (best-effort, don't fail if Qdrant is unavailable)
+    # Delete vectors from Qdrant directly without loading FastEmbed model
     try:
-        service = EmbeddingService(provider=FastEmbedProvider())
-        service.delete_workspace_vectors(workspace.id)
+        from embeddings.service import EmbeddingService
+        EmbeddingService.delete_workspace_vectors(workspace.id)
     except Exception as e:
         from utils.logger import logger
         logger.warning(f"Failed to delete Qdrant vectors for workspace {workspace_id}: {e}")
