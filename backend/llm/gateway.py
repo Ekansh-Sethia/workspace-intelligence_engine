@@ -38,9 +38,9 @@ from utils.logger import logger
 def _inject_api_keys() -> None:
     """Write configured API keys into the environment for LiteLLM to discover."""
     if settings.GROQ_API_KEY:
-        os.environ["GROQ_API_KEY"] = settings.GROQ_API_KEY
+        os.environ["GROQ_API_KEY"] = settings.GROQ_API_KEY.strip("\"' \r\n\t")
     if settings.GEMINI_API_KEY:
-        os.environ["GEMINI_API_KEY"] = settings.GEMINI_API_KEY
+        os.environ["GEMINI_API_KEY"] = settings.GEMINI_API_KEY.strip("\"' \r\n\t")
 
 
 def _build_router():
@@ -54,26 +54,29 @@ def _build_router():
     """
     from litellm import Router  # deferred — avoids ~183 MB at startup
 
+    gemini_key = (settings.GEMINI_API_KEY or "not-set").strip("\"' \r\n\t")
+    groq_key = (settings.GROQ_API_KEY or "not-set").strip("\"' \r\n\t")
+
     model_list = [
         {
             "model_name": "primary",
             "litellm_params": {
                 "model": settings.LLM_PRIMARY_MODEL,
-                "api_key": settings.GEMINI_API_KEY or "not-set",
+                "api_key": gemini_key,
             },
         },
         {
             "model_name": "fallback",
             "litellm_params": {
                 "model": settings.LLM_FALLBACK_MODEL,
-                "api_key": settings.GROQ_API_KEY or "not-set",
+                "api_key": groq_key,
             },
         },
         {
             "model_name": "fast",
             "litellm_params": {
                 "model": settings.LLM_FAST_MODEL,
-                "api_key": settings.GROQ_API_KEY or "not-set",
+                "api_key": groq_key,
             },
         },
     ]
