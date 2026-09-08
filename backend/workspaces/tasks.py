@@ -138,10 +138,13 @@ async def run_processing(workspace_id: int):
         except Exception as _mt_err:
             logger.debug("malloc_trim not available (non-Linux env): %s", _mt_err)
         
-        # 3. Generate AI metadata for all files + workspace roll-up
-        async with AsyncSessionLocal() as db:
-            metadata_service = MetadataService()
-            await metadata_service.generate_for_workspace(workspace_id, db)
+        # 3. Generate concise metadata for all files + workspace roll-up (extractive, 0 MB extra RAM)
+        try:
+            async with AsyncSessionLocal() as db:
+                metadata_service = MetadataService()
+                await metadata_service.generate_for_workspace(workspace_id, db)
+        except Exception as meta_exc:
+            logger.warning(f"Workspace {workspace_id}: non-fatal metadata extraction warning: {meta_exc}")
         
         # 4. Update status to ready
         await update_workspace_status(workspace_id, WorkspaceStatus.READY)

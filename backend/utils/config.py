@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     RAG_HISTORY_TURNS: int = 6          # Number of past turns to include in context (3 user + 3 assistant)
     
     # Models
-    LLM_PRIMARY_MODEL: str = "gemini/gemini-3.6-flash"
+    LLM_PRIMARY_MODEL: str = "gemini/gemini-2.5-flash"
     LLM_FALLBACK_MODEL: str = "groq/llama-3.1-8b-instant"
     LLM_FAST_MODEL: str = "groq/llama-3.3-70b-versatile"
     LLM_VISION_MODEL: str = "llama-3.2-11b-vision-preview"

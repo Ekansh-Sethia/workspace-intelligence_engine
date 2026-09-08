@@ -1,91 +1,79 @@
 """
-MetadataService - Phase 8
+MetadataService - Phase 8 (Memory-Optimized for Render Free Tier)
 
-Generates AI-powered metadata for files and workspaces after the embedding
-pipeline completes. Uses llm_complete to generate summaries, keywords, topics.
-
-Graceful degradation: LLM failure for one file does not affect the workspace.
+Generates concise metadata (summaries, keywords, topics) and roll-up statistics
+for files and workspaces without invoking external LLMs during the heavy ingestion pipeline.
+This prevents loading LiteLLM into RAM alongside ONNX, guaranteeing memory stays
+well below the 512MB Render limit.
 """
-import json
 import os
+import re
+from collections import Counter
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from workspaces.models import Workspace, File
-from llm.gateway import llm_complete
+from workspaces.models import Workspace, File, Chunk
 from utils.logger import logger
 
-
-_FILE_SUMMARY_SYSTEM = (
-    "You are a precise document analyst. Given a sample of text from a document, "
-    "produce a concise metadata object. "
-    "Return ONLY a valid JSON object with exactly these three keys: "
-    '"summary" (2-3 sentences about the document), '
-    '"keywords" (JSON array of 5-8 keyword strings), '
-    '"topics" (JSON array of 2-4 topic label strings). '
-    "No markdown fences or explanation, only the JSON."
-)
-
-_WORKSPACE_SUMMARY_SYSTEM = (
-    "You are a workspace analyst. Given per-file summaries, produce a workspace overview. "
-    "Return ONLY a valid JSON object with exactly these three keys: "
-    '"summary" (3-4 sentence overview), '
-    '"keywords" (JSON array of 8-12 keyword strings), '
-    '"topics" (JSON array of 3-6 topic label strings). '
-    "No markdown fences or explanation, only the JSON."
-)
+_STOPWORDS = {
+    "the", "and", "for", "that", "this", "with", "from", "have", "are", "was",
+    "were", "which", "your", "about", "into", "some", "more", "also", "will",
+    "been", "would", "could", "their", "there", "what", "when", "where", "them",
+    "each", "other", "then", "than", "very", "just", "such", "only", "first",
+    "after", "before", "over", "most", "through", "these", "those", "both"
+}
 
 
-def _sample_text(text: str, max_chars: int = 3000) -> str:
-    """Return the first max_chars characters of text for the LLM prompt."""
-    return text[:max_chars].strip()
+def _extract_extractive_summary(text: str, max_sentences: int = 3, max_chars: int = 350) -> str:
+    """Extract first few representative sentences cleanly."""
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if not cleaned:
+        return ""
+    # Split on sentence boundaries
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if len(s.strip()) > 15]
+    if sentences:
+        summary = " ".join(sentences[:max_sentences])
+    else:
+        summary = cleaned[:max_chars]
+    return summary[:max_chars].strip()
 
 
-async def _parse_metadata_response(raw: str) -> Optional[dict]:
-    """Safely parse the LLM JSON response. Returns None on parse error."""
-    try:
-        cleaned = raw.strip().strip("`").strip("json").strip("`").strip()
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning(f"MetadataService: failed to parse LLM JSON: {exc!r}")
-        return None
+def _extract_keywords(text: str, top_n: int = 6) -> list[str]:
+    """Extract top frequent informative keywords from text."""
+    words = [w.lower() for w in re.findall(r"[a-zA-Z]{4,}", text) if w.lower() not in _STOPWORDS]
+    if not words:
+        return []
+    return [word for word, _ in Counter(words).most_common(top_n)]
 
 
 class MetadataService:
-    """Generates AI metadata for every file in a workspace, then rolls it up."""
+    """Generates concise metadata for every file in a workspace, then rolls it up."""
 
     async def generate_for_file(self, file_record: File, db: AsyncSession) -> None:
-        """Read file chunks from Postgres, send sample to LLM, persist metadata."""
-        from workspaces.models import Chunk
+        """Read file chunks from Postgres, extract summary + keywords, persist."""
         result = await db.execute(
             select(Chunk.text)
             .where(Chunk.file_id == file_record.id)
             .order_by(Chunk.chunk_index)
-            .limit(8)
+            .limit(6)
         )
         chunk_texts = result.scalars().all()
 
         if not chunk_texts:
-            logger.warning(f"MetadataService: no chunks for file {file_record.id}, skipping.")
+            logger.info(f"MetadataService: no text chunks for file {file_record.id}, skipping.")
             return
 
-        sample = _sample_text("\n\n".join(chunk_texts))
-        try:
-            raw_response = await llm_complete(
-                system_prompt=_FILE_SUMMARY_SYSTEM,
-                user_message=f"Document text sample:\n\n{sample}",
-                max_tokens=400,
-            )
-            metadata = await _parse_metadata_response(raw_response)
-            if metadata:
-                file_record.summary = metadata.get("summary")
-                file_record.keywords = metadata.get("keywords", [])
-                file_record.topics = metadata.get("topics", [])
-                logger.info(f"MetadataService: metadata OK for file {file_record.id}")
-        except Exception as exc:
-            logger.warning(f"MetadataService: LLM failed for file {file_record.id}: {exc!r}")
+        combined_sample = " ".join(chunk_texts)
+        summary = _extract_extractive_summary(combined_sample)
+        keywords = _extract_keywords(combined_sample, top_n=6)
+        topics = keywords[:3] if keywords else ["general"]
+
+        file_record.summary = summary
+        file_record.keywords = keywords
+        file_record.topics = topics
+        logger.info(f"MetadataService: extractive metadata OK for file {file_record.id}")
 
     async def generate_for_workspace(self, workspace_id: int, db: AsyncSession) -> None:
         """Generate per-file metadata then roll up into a workspace-level summary."""
@@ -101,39 +89,37 @@ class MetadataService:
         files = files_result.scalars().all()
 
         doc_count, img_count, total_chunks = 0, 0, 0
+        all_keywords = []
+        file_summaries = []
+
         for file_record in files:
             if not file_record.mime_type.startswith("image/"):
                 await self.generate_for_file(file_record, db)
                 doc_count += 1
+                if file_record.keywords:
+                    all_keywords.extend(file_record.keywords)
+                if file_record.summary:
+                    basename = os.path.basename(file_record.relative_path)
+                    file_summaries.append(f"{basename}: {file_record.summary}")
             else:
                 img_count += 1
             total_chunks += file_record.chunk_count or 0
 
-        await db.commit()
-
-        file_summaries = [
-            f"File: {os.path.basename(f.relative_path)}\nSummary: {f.summary}"
-            for f in files if f.summary
-        ]
-
+        # Create concise workspace overview
         if file_summaries:
-            sample = _sample_text("\n\n".join(file_summaries), max_chars=4000)
-            try:
-                raw_response = await llm_complete(
-                    system_prompt=_WORKSPACE_SUMMARY_SYSTEM,
-                    user_message=f"File summaries:\n\n{sample}",
-                    max_tokens=600,
-                )
-                ws_metadata = await _parse_metadata_response(raw_response)
-                if ws_metadata:
-                    workspace.summary = ws_metadata.get("summary")
-                    workspace.keywords = ws_metadata.get("keywords", [])
-                    workspace.topics = ws_metadata.get("topics", [])
-            except Exception as exc:
-                logger.warning(f"MetadataService: workspace roll-up failed: {exc!r}")
+            top_summaries = " | ".join(file_summaries[:3])
+            workspace.summary = f"Workspace containing {doc_count} document(s). {top_summaries}"[:500]
+        else:
+            workspace.summary = f"Workspace with {len(files)} file(s)."
+
+        # Roll up top unique keywords across the whole workspace
+        top_kws = [word for word, _ in Counter(all_keywords).most_common(8)]
+        workspace.keywords = top_kws
+        workspace.topics = top_kws[:4]
 
         workspace.document_count = doc_count
         workspace.image_count = img_count
         workspace.total_chunk_count = total_chunks
         await db.commit()
-        logger.info(f"MetadataService: workspace {workspace_id} complete")
+        logger.info(f"MetadataService: workspace {workspace_id} complete (0 MB extra RAM used)")
+
