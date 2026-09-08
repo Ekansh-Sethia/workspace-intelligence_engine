@@ -13,7 +13,7 @@ Turn chaotic archives of mixed documents, presentations, and images into structu
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 [![Tests](https://img.shields.io/badge/Tests-66%20Passed-success?style=for-the-badge&logo=pytest&logoColor=white)](backend/tests/)
 
-[Live Demo](https://contextiq-demo.onrender.com) • [Key Features](#-key-features) • [Architecture](#-architecture) • [512MB RAM Optimization](#-engineering-spotlight-surviving-a-512-mb-ram-limit) • [Quickstart](#-quickstart) • [API Reference](#-api-endpoints)
+[Live Demo](https://wie-frontend-beta.vercel.app/) • [Key Features](#-key-features) • [Architecture](#-architecture) • [512MB RAM Optimization](#-engineering-spotlight-surviving-a-512-mb-ram-limit) • [Quickstart](#-quickstart) • [API Reference](#-api-endpoints)
 
 ---
 
@@ -229,6 +229,8 @@ Output:
 * `GET /api/v1/workspaces/{id}/chat/sessions` — List chat sessions
 * `POST /api/v1/workspaces/{id}/chat/sessions` — Create a new conversation session
 * `POST /api/v1/workspaces/{id}/chat/sessions/{session_id}/messages` — Send a query and receive a streaming SSE response with citations
+
+---
 
 <div align="center">
   <sub>Built by <b>Ekansh Sethia</b></sub>
