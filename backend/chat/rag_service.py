@@ -48,8 +48,8 @@ from workspaces.search_schemas import SearchResult
 
 
 # ── Constants ──────────────────────────────────────────────────────────────
-MAX_AGENT_ITERATIONS = 3  # Hard cap; loop is `for i in range(N)` — provably finite
-MAX_CONTEXT_CHUNKS = 8    # Cap total context chunks to stay comfortably under Groq 6k TPM fallback limit
+MAX_AGENT_ITERATIONS = 3   # Hard cap; loop is `for i in range(N)` — provably finite
+MAX_CONTEXT_CHUNKS = 15   # Raised from 8: Gemini 3.5 Flash has 1M token ctx, gpt-oss-20b has 131K — both handle 15 chunks easily
 
 
 # ── Query Rewriter ─────────────────────────────────────────────────────────
@@ -231,9 +231,9 @@ Each chunk is labelled with the source filename and its structural type.
 STRICT RULES:
 1. Only use information from the provided context chunks to answer.
 2. STRICT GROUNDING: You MUST NOT use your internal knowledge to answer the question.
-   If the provided context chunks do not contain the exact answer for the user's question,
-   you must reply: "The provided context does not contain the answer to this question."
-   (EXCEPTION: If you are grading a quiz, you MUST use the Answer Key from the chat history instead of the context chunks).
+   - If the context chunks contain NO relevant information at all, reply: "The provided context does not contain the answer to this question."
+   - If the context chunks contain PARTIAL information (e.g., fewer items than requested, or only some aspects of the question), provide ALL the relevant information you DO find, and clearly note at the end what was not found. For example: "Based on the available context, here are 3 questions (the document may contain more that were not retrieved)."
+   - EXCEPTION: If you are grading a quiz, you MUST use the Answer Key from the chat history instead of the context chunks.
    Do not attempt to guess or calculate the answer yourself.
 3. Never make up facts, URLs, code, or names that are not present in the context.
 4. Be concise and clear. Format your response as plain text with clear spacing and
@@ -341,12 +341,12 @@ class RAGService:
         self._db = db
         self._search_service = SearchService(provider=FastEmbedProvider())
 
-    def _search(self, workspace_id: int, query: str, limit: int | None = None) -> list[SearchResult]:
+    def _search(self, workspace_id: int, query: str, limit: int = 8) -> list[SearchResult]:
         """Thin wrapper around SearchService for use inside the agentic loop."""
         return self._search_service.search(
             workspace_id=workspace_id,
             query=query,
-            limit=limit or 3,  # Hard limit to 3 to prevent token explosion during expansion
+            limit=limit,
         )
 
     async def stream_answer(
@@ -383,8 +383,10 @@ class RAGService:
         # 2. Layer 0 — Conversational Query Rewriting
         search_query = await _rewrite_query(query, history_messages)
 
-        # 3. Initial retrieval pass (capped at 3 hits)
-        chunks: list[SearchResult] = self._search(workspace_id, search_query, limit=3)
+        # 3. Initial retrieval pass — raised from 3 to 8 to capture full Q&A files.
+        # Even at 8 chunks × ~400 tokens each = ~3,200 tokens of raw context,
+        # well within both Gemini (1M ctx) and gpt-oss-20b (131K ctx) limits.
+        chunks: list[SearchResult] = self._search(workspace_id, search_query, limit=8)
         logger.info(
             f"RAGService: initial retrieval — {len(chunks)} chunks "
             f"for workspace={workspace_id}, session={session_id}"
@@ -458,7 +460,7 @@ class RAGService:
                         continue
 
                     logger.info(f"RAGService: agent search #{iteration + 1} — {tool_query!r}")
-                    new_chunks = self._search(workspace_id, tool_query, limit=3)
+                    new_chunks = self._search(workspace_id, tool_query, limit=5)
                     # Expand new hits with their siblings too
                     new_chunks = await _expand_with_siblings(new_chunks, self._db)
                     new_chunks = await _expand_with_answer_keys(new_chunks, self._db)
