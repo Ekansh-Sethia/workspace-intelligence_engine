@@ -31,6 +31,7 @@ def test_rag_system_prompt_with_context():
     # Check strict grounding rule
     assert "STRICT GROUNDING: You MUST NOT use your internal knowledge" in prompt
     assert "The provided context does not contain the answer to this question" in prompt
+    assert "provide ALL the relevant information you DO find" in prompt
     
     # Check context mixing prevention rule
     assert "DO NOT mix options, answers, or text from different questions." in prompt
@@ -41,23 +42,26 @@ def test_rag_system_prompt_with_context():
 
 def test_rag_system_prompt_max_context_limit():
     """
-    Test that context chunks are capped at MAX_CONTEXT_CHUNKS (8) to prevent 
+    Test that context chunks are capped at MAX_CONTEXT_CHUNKS (15) to prevent
     context window overflow which can lead to hallucination or token limits.
     """
+    from chat.rag_service import MAX_CONTEXT_CHUNKS
+
     chunks = []
-    for i in range(15):
+    for i in range(MAX_CONTEXT_CHUNKS + 5):
         chunks.append(
             SearchResult(
-                score=0.9, text=f"Fact {i}", file_id=1, chunk_id=i, 
+                score=0.9, text=f"Fact {i}", file_id=1, chunk_id=i,
                 chunk_index=i, page_number=1, chunk_type="text"
             )
         )
-    
+
     prompt = _build_system_prompt(chunks, {1: "facts.txt"})
-    
-    # The prompt should contain Fact 0 to 7, but not Fact 8+
-    for i in range(8):
+
+    # The prompt should contain all facts up to the cap
+    for i in range(MAX_CONTEXT_CHUNKS):
         assert f"Fact {i}" in prompt
-    
-    for i in range(8, 15):
+
+    # Facts beyond the cap should NOT appear
+    for i in range(MAX_CONTEXT_CHUNKS, MAX_CONTEXT_CHUNKS + 5):
         assert f"Fact {i}" not in prompt

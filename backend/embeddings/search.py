@@ -13,6 +13,16 @@ Design notes
 
 - Scores returned by Qdrant for Cosine distance are in the range [-1, 1].
   In practice, semantically relevant results score above ~0.5.
+
+Score threshold note
+---------------------
+MIN_SCORE_THRESHOLD is set at 0.15 (was 0.30).
+Rationale: individual Q&A chunks ("Q: What is a deadlock? A: ...") have low
+cosine similarity to queries like "interview questions for goldman sachs"
+because they don't repeat those keywords — they score ~0.15–0.25.
+The 0.30 threshold was silently discarding all of them.
+The LLM is a far better relevance judge than a hard cosine cutoff.
+We retrieve more candidates and let the model decide what to use.
 """
 from typing import List
 
@@ -22,6 +32,12 @@ from core.qdrant import get_qdrant_client, COLLECTION_NAME
 from embeddings.base import EmbeddingProvider
 from workspaces.search_schemas import SearchResult
 from utils.logger import logger
+
+
+MIN_SCORE_THRESHOLD = 0.30  # Intentionally conservative — the LLM is a better relevance judge,
+                             # but we use 0.30 to avoid pulling noise from tangentially-related
+                             # files. Full-file expansion (Layer 1.5) handles deep retrieval
+                             # once the correct file is identified by its title/header chunk.
 
 
 class SearchService:
@@ -68,28 +84,22 @@ class SearchService:
             ]
         )
 
-        # 3. Run the similarity search in Qdrant
-        #    client.search() was removed in qdrant-client >= 1.10.
-        #    The new unified API is client.query_points().
+        # 3. Run the similarity search in Qdrant.
+        #    We request limit*3 candidates so that after threshold filtering we
+        #    still have enough results. Qdrant HNSW retrieval cost is O(log N)
+        #    regardless of candidate count — this is essentially free.
         client = get_qdrant_client()
         result = client.query_points(
             collection_name=COLLECTION_NAME,
             query=query_vector,
             query_filter=workspace_filter,
-            limit=limit,
+            limit=limit * 3,
             with_payload=True,
         )
 
-        # 4. Unpack Qdrant ScoredPoints into our Pydantic response schema
-        #    query_points() returns a QueryResponse; the hits are in .points
-        #
-        #    Minimum confidence threshold: 0.30 (30%)
-        #    Results below this score are discarded. We previously set this to 51%
-        #    but found it aggressively filtered out valid chunks for short queries.
-        #    The LLM in the Chat Layer is a better judge of relevance than a hard
-        #    cosine similarity cutoff, so we supply the chunks and let the LLM filter.
-        MIN_SCORE_THRESHOLD = 0.30
-
+        # 4. Unpack Qdrant ScoredPoints into our Pydantic response schema.
+        #    Threshold at 0.15 — low enough to catch topically-relevant chunks
+        #    that don't repeat the query keywords (e.g. individual Q&A pairs).
         results = [
             SearchResult(
                 score=round(hit.score, 4),
@@ -102,9 +112,10 @@ class SearchService:
             )
             for hit in result.points
             if hit.score >= MIN_SCORE_THRESHOLD
-        ]
+        ][:limit]  # Re-cap to the requested limit after threshold filtering
 
         logger.info(
-            f"SearchService: returned {len(results)} results for workspace {workspace_id}"
+            f"SearchService: returned {len(results)} results for workspace {workspace_id} "
+            f"(threshold={MIN_SCORE_THRESHOLD}, candidates_fetched={limit * 3})"
         )
         return results

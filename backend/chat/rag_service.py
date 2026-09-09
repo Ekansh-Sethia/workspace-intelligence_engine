@@ -49,7 +49,7 @@ from workspaces.search_schemas import SearchResult
 
 # ── Constants ──────────────────────────────────────────────────────────────
 MAX_AGENT_ITERATIONS = 3   # Hard cap; loop is `for i in range(N)` — provably finite
-MAX_CONTEXT_CHUNKS = 15   # Raised from 8: Gemini 3.5 Flash has 1M token ctx, gpt-oss-20b has 131K — both handle 15 chunks easily
+MAX_CONTEXT_CHUNKS = 25   # Raised to match MAX_FILE_CHUNKS_PER_FILE; Gemini 3.5 Flash handles 1M tokens
 
 
 # ── Query Rewriter ─────────────────────────────────────────────────────────
@@ -202,6 +202,71 @@ async def _expand_with_answer_keys(
     logger.info(
         f"RAGService: answer key expansion added {len(new_chunks)} chunks "
         f"(total context: {len(merged)} chunks)"
+    )
+    return merged
+
+
+# Maximum chunks to pull per matched file during full-file expansion.
+# A 5 MB text file at 500 tokens/chunk is ~500 chunks — we cap it here.
+# 25 chunks × ~400 tokens = ~10,000 tokens; fine for both Gemini and gpt-oss-20b.
+MAX_FILE_CHUNKS_PER_FILE = 25
+
+
+async def _expand_with_full_file(
+    chunks: list[SearchResult],
+    db: AsyncSession,
+) -> list[SearchResult]:
+    """
+    Layer 1.5 — Full-file expansion.
+
+    When a file is identified as relevant by the semantic search, fetch ALL
+    its chunks ordered by chunk_index. This is critical for queries like:
+      - "list all interview questions"
+      - "what are all the topics covered"
+      - "summarise the entire file"
+
+    Because individual Q&A chunks have LOW cosine similarity to a broad query
+    like 'interview questions for goldman sachs' (they score 0.10–0.25 and
+    were previously filtered out by the 0.30 threshold), they never appeared
+    in the context. Now we:
+      1. Identify which file(s) are relevant from the top-k semantic hits.
+      2. Fetch ALL chunks from those files (capped at MAX_FILE_CHUNKS_PER_FILE).
+      3. Merge with deduplification and sort by file+index for coherent reading.
+    """
+    if not chunks:
+        return chunks
+
+    file_ids = list({c.file_id for c in chunks})
+
+    result = await db.execute(
+        select(Chunk)
+        .where(Chunk.file_id.in_(file_ids))
+        .order_by(Chunk.file_id, Chunk.chunk_index)
+        .limit(MAX_FILE_CHUNKS_PER_FILE * len(file_ids))
+    )
+    all_file_chunks = result.scalars().all()
+
+    existing_ids = {c.chunk_id for c in chunks}
+    new_chunks = [
+        SearchResult(
+            score=0.0,
+            text=fc.text,
+            file_id=fc.file_id,
+            chunk_id=fc.id,
+            chunk_index=fc.chunk_index,
+            page_number=fc.page_number,
+            chunk_type=getattr(fc, "chunk_type", "text"),
+        )
+        for fc in all_file_chunks
+        if fc.id not in existing_ids
+    ]
+
+    merged = chunks + new_chunks
+    merged.sort(key=lambda c: (c.file_id, c.chunk_index))
+
+    logger.info(
+        f"RAGService: full-file expansion added {len(new_chunks)} chunks "
+        f"from {len(file_ids)} file(s) (total: {len(merged)} chunks)"
     )
     return merged
 
@@ -394,6 +459,12 @@ class RAGService:
 
         # 4. Layer 1 — Sibling chunk expansion
         chunks = await _expand_with_siblings(chunks, self._db)
+
+        # 4.3 Layer 1.5 — Full-file expansion.
+        # If semantic search found ANY chunk from a file, fetch ALL chunks from
+        # that file. This is the definitive fix for "list all questions" queries
+        # where individual Q&A chunks have low cosine similarity to the broad query.
+        chunks = await _expand_with_full_file(chunks, self._db)
 
         # 4.5 Layer 2.5 — Auto-fetch Answer Keys for matched files
         chunks = await _expand_with_answer_keys(chunks, self._db)
