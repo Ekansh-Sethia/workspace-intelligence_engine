@@ -235,7 +235,7 @@ def test_workspace(zip_path, title, test_cases):
                 "matched_keywords": matched_kw,
                 "all_keywords": keywords,
             })
-            time.sleep(2)
+            time.sleep(12)
     finally:
         # Cleanup workspace
         print(f"\n[6] Cleanup: Deleting test workspace {ws_id}...")
