@@ -6,6 +6,7 @@ import { isAuthenticated, removeToken } from '@/lib/auth';
 import { fetchWithAuth } from '@/lib/api';
 import { WorkspaceCard } from '@/components/WorkspaceCard';
 import { UploadModal } from '@/components/UploadModal';
+import { ConfirmModal } from '@/components/ConfirmModal';
 import { Logo } from '@/components/Logo';
 
 export default function DashboardPage() {
@@ -13,6 +14,8 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true);
     const [workspaces, setWorkspaces] = useState<any[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [workspaceToDelete, setWorkspaceToDelete] = useState<{ id: number; name: string } | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const fetchWorkspaces = useCallback(async () => {
         try {
@@ -56,11 +59,20 @@ export default function DashboardPage() {
         router.push('/login');
     };
 
-    const handleDelete = async (id: number) => {
-        if (!confirm('Are you sure you want to delete this workspace? This cannot be undone.')) return;
+    const handleDelete = (id: number) => {
+        const ws = workspaces.find(w => w.id === id);
+        setWorkspaceToDelete({ id, name: ws?.name || 'this workspace' });
+    };
+
+    const confirmDeleteWorkspace = async () => {
+        if (!workspaceToDelete) return;
+        const id = workspaceToDelete.id;
+        setIsDeleting(true);
 
         // Optimistic UI: remove immediately so UI feels instant
         setWorkspaces(prev => prev.filter(ws => ws.id !== id));
+        setWorkspaceToDelete(null);
+        setIsDeleting(false);
 
         try {
             const res = await fetchWithAuth(`/api/v1/workspaces/${id}`, {
@@ -68,7 +80,6 @@ export default function DashboardPage() {
             });
             if (!res.ok) {
                 fetchWorkspaces();
-                alert("Failed to delete workspace");
             }
         } catch (err) {
             fetchWorkspaces();
@@ -141,6 +152,18 @@ export default function DashboardPage() {
                 isOpen={isModalOpen}
                 onClose={() => setIsModalOpen(false)}
                 onSuccess={() => fetchWorkspaces()}
+            />
+
+            <ConfirmModal
+                isOpen={!!workspaceToDelete}
+                title="Delete Workspace"
+                message={`Are you sure you want to delete "${workspaceToDelete?.name}"? This action cannot be undone and all indexed documents and chats will be permanently removed.`}
+                confirmText="Delete Workspace"
+                cancelText="Cancel"
+                isDestructive={true}
+                isLoading={isDeleting}
+                onConfirm={confirmDeleteWorkspace}
+                onClose={() => setWorkspaceToDelete(null)}
             />
         </div>
     );

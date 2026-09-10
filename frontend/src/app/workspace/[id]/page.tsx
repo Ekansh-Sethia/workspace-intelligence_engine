@@ -6,6 +6,7 @@ import { isAuthenticated } from '@/lib/auth';
 import { fetchWithAuth } from '@/lib/api';
 import { ChatMessage } from '@/components/ChatMessage';
 import { ChatSidebar } from '@/components/ChatSidebar';
+import { ConfirmModal } from '@/components/ConfirmModal';
 import { getToken } from '@/lib/auth';
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -50,6 +51,8 @@ export default function WorkspacePage() {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
     const [isCreatingSession, setIsCreatingSession] = useState(false);
+    const [sessionToDelete, setSessionToDelete] = useState<{ id: number; title: string } | null>(null);
+    const [isDeletingSession, setIsDeletingSession] = useState(false);
 
     // Message state
     const [messages, setMessages] = useState<Message[]>([]);
@@ -152,8 +155,15 @@ export default function WorkspacePage() {
 
 
     // ── Delete session ─────────────────────────────────────────────────────
-    const handleDeleteSession = useCallback(async (sessionId: number) => {
-        if (!confirm('Are you sure you want to delete this chat session?')) return;
+    const handleDeleteSession = useCallback((sessionId: number) => {
+        const session = sessions.find(s => s.id === sessionId);
+        setSessionToDelete({ id: sessionId, title: session?.title || 'this chat' });
+    }, [sessions]);
+
+    const confirmDeleteSession = useCallback(async () => {
+        if (!sessionToDelete) return;
+        const sessionId = sessionToDelete.id;
+        setIsDeletingSession(true);
         
         // Optimistic UI: remove immediately
         setSessions(prev => prev.filter(s => s.id !== sessionId));
@@ -161,6 +171,8 @@ export default function WorkspacePage() {
             setActiveSessionId(null);
             setMessages([]);
         }
+        setSessionToDelete(null);
+        setIsDeletingSession(false);
 
         try {
             const res = await fetchWithAuth(
@@ -174,7 +186,7 @@ export default function WorkspacePage() {
             fetchSessions();
             console.error('Failed to delete session', err);
         }
-    }, [workspaceId, activeSessionId, fetchSessions]);
+    }, [sessionToDelete, workspaceId, activeSessionId, fetchSessions]);
 
     // ── Create new chat session ────────────────────────────────────────────
     const handleNewChat = useCallback(async () => {
@@ -494,6 +506,18 @@ export default function WorkspacePage() {
                     </main>
                 </div>
             )}
+
+            <ConfirmModal
+                isOpen={!!sessionToDelete}
+                title="Delete Chat Session"
+                message={`Are you sure you want to delete "${sessionToDelete?.title}"? All messages in this conversation will be permanently removed.`}
+                confirmText="Delete Chat"
+                cancelText="Cancel"
+                isDestructive={true}
+                isLoading={isDeletingSession}
+                onConfirm={confirmDeleteSession}
+                onClose={() => setSessionToDelete(null)}
+            />
         </div>
     );
 }
