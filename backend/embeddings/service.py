@@ -78,14 +78,22 @@ class EmbeddingService:
         client = get_qdrant_client()
         total_upserted = 0
 
+        import os
+
         # 2. Process in bounded batches, fetching full records only for the current batch
         for batch_start in range(0, len(chunk_ids), self._batch_size):
             batch_ids = chunk_ids[batch_start: batch_start + self._batch_size]
             batch_res = await db.execute(
-                select(Chunk).where(Chunk.id.in_(batch_ids)).order_by(Chunk.id)
+                select(Chunk, File.relative_path)
+                .join(File, Chunk.file_id == File.id)
+                .where(Chunk.id.in_(batch_ids))
+                .order_by(Chunk.id)
             )
-            batch = batch_res.scalars().all()
-            texts = [chunk.text for chunk in batch]
+            rows = batch_res.all()
+            texts = [
+                f"Document: {os.path.basename(rel_path)}\n{chunk.text}"
+                for chunk, rel_path in rows
+            ]
 
             # 3. Generate vectors via the injected provider
             vectors = self._provider.embed_batch(texts)
@@ -105,7 +113,7 @@ class EmbeddingService:
                         "chunk_type": getattr(chunk, "chunk_type", "text"),
                     },
                 )
-                for chunk, vector in zip(batch, vectors)
+                for (chunk, _), vector in zip(rows, vectors)
             ]
 
             # 5. Upsert into Qdrant (idempotent)
@@ -113,7 +121,7 @@ class EmbeddingService:
             total_upserted += len(points)
 
             # Explicitly free batch memory
-            del points, vectors, texts, batch
+            del points, vectors, texts, rows
             gc.collect()
             try:
                 import ctypes

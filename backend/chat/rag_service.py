@@ -31,6 +31,7 @@ Engineering guideline compliance
 """
 import json
 import os
+import re
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -92,10 +93,16 @@ async def _rewrite_query(query: str, history: list[dict]) -> str:
             user_message=user_message,
             max_tokens=150,
         )
+        cleaned = (rewritten or "").strip()
+        if not cleaned:
+            logger.info(
+                f"RAGService: query rewriter returned empty string, using original query {query!r}"
+            )
+            return query
         logger.info(
-            f"RAGService: query rewritten\n  Original : {query!r}\n  Rewritten: {rewritten!r}"
+            f"RAGService: query rewritten\n  Original : {query!r}\n  Rewritten: {cleaned!r}"
         )
-        return rewritten
+        return cleaned
     except Exception as exc:
         logger.warning(f"RAGService: query rewriting failed ({exc}), using original query")
         return query
@@ -226,7 +233,7 @@ async def _expand_with_full_file(
       - "summarise the entire file"
 
     Because individual Q&A chunks have LOW cosine similarity to a broad query
-    like 'interview questions for goldman sachs' (they score 0.10–0.25 and
+    like 'system architecture overview' (they score 0.10–0.25 and
     were previously filtered out by the 0.30 threshold), they never appeared
     in the context. Now we:
       1. Identify which file(s) are relevant from the top-k semantic hits.
@@ -271,7 +278,7 @@ async def _expand_with_full_file(
     return merged
 
 
-# ── File Name Lookup ───────────────────────────────────────────────────────
+# ── File Name Lookup & Keyword Matching ─────────────────────────────────────
 async def _fetch_file_names(file_ids: list[int], db: AsyncSession) -> dict[int, str]:
     """
     Fetch the relative_path for each file_id from Postgres.
@@ -283,6 +290,47 @@ async def _fetch_file_names(file_ids: list[int], db: AsyncSession) -> dict[int, 
         select(File.id, File.relative_path).where(File.id.in_(file_ids))
     )
     return {row.id: os.path.basename(row.relative_path) for row in result.all()}
+
+
+async def _match_files_by_name(
+    workspace_id: int,
+    query: str,
+    db: AsyncSession,
+) -> list[int]:
+    """
+    Layer 0.5 — Filename keyword matching (hybrid retrieval).
+    Find file IDs in the workspace whose filenames match keywords in the user query.
+    Enables instant, deterministic retrieval when the query refers to documents or topics
+    captured in filenames (e.g. 'interview questions', 'syllabus', 'resume').
+    """
+    stopwords = {
+        "what", "which", "where", "when", "with", "from", "that", "this",
+        "these", "those", "have", "been", "does", "mention", "tell", "give",
+        "show", "list", "about", "your", "they", "them", "their", "there",
+        "here", "would", "could", "should", "some", "more", "much", "many",
+        "the", "and", "for", "are", "can", "how", "any"
+    }
+    words = [
+        w.lower()
+        for w in re.findall(r'\b[a-zA-Z0-9_-]{3,}\b', query)
+        if w.lower() not in stopwords
+    ]
+    if not words:
+        return []
+
+    res = await db.execute(
+        select(File.id, File.relative_path)
+        .where(File.workspace_id == workspace_id)
+    )
+    all_files = res.all()
+
+    matched_file_ids = []
+    for file_id, rel_path in all_files:
+        filename_lower = os.path.basename(rel_path).lower()
+        if any(w in filename_lower for w in words):
+            matched_file_ids.append(file_id)
+
+    return matched_file_ids
 
 
 # ── System Prompt Builder ──────────────────────────────────────────────────
@@ -359,27 +407,38 @@ def _format_chunks(chunks: list[SearchResult], file_names: dict[int, str]) -> st
     )
 
 
-def _build_system_prompt(chunks: list[SearchResult], file_names: dict[int, str]) -> str:
+def _build_system_prompt(
+    chunks: list[SearchResult],
+    file_names: dict[int, str],
+    available_files: list[str] | None = None,
+) -> str:
     """Build the grounded system prompt with filename-annotated context chunks."""
     if not chunks:
         context_str = "No relevant context chunks were found for this query."
-        return _SYSTEM_PROMPT_TEMPLATE.format(context=context_str)
+        prompt = _SYSTEM_PROMPT_TEMPLATE.format(context=context_str)
+    else:
+        # We must enforce MAX_CONTEXT_CHUNKS to prevent token explosion for fallback models.
+        # Prioritize answer keys (vital for grading), then highest-scoring semantic hits.
+        answer_keys = [c for c in chunks if c.chunk_type == "answer_key"]
+        others = [c for c in chunks if c.chunk_type != "answer_key"]
         
-    # We must enforce MAX_CONTEXT_CHUNKS to prevent token explosion for fallback models.
-    # Prioritize answer keys (vital for grading), then highest-scoring semantic hits.
-    answer_keys = [c for c in chunks if c.chunk_type == "answer_key"]
-    others = [c for c in chunks if c.chunk_type != "answer_key"]
-    
-    # Sort others by score descending (siblings and agentic hits might have score=0, 
-    # but initial hits have real cosine scores).
-    others.sort(key=lambda c: c.score, reverse=True)
-    
-    capped_chunks = (answer_keys + others)[:MAX_CONTEXT_CHUNKS]
-    
-    # Re-sort capped chunks sequentially by file and index to maintain reading flow
-    capped_chunks.sort(key=lambda c: (c.file_id, c.chunk_index))
+        # Sort others by score descending (siblings and agentic hits might have score=0, 
+        # but initial hits have real cosine scores).
+        others.sort(key=lambda c: c.score, reverse=True)
+        
+        capped_chunks = (answer_keys + others)[:MAX_CONTEXT_CHUNKS]
+        
+        # Re-sort capped chunks sequentially by file and index to maintain reading flow
+        capped_chunks.sort(key=lambda c: (c.file_id, c.chunk_index))
 
-    return _SYSTEM_PROMPT_TEMPLATE.format(context=_format_chunks(capped_chunks, file_names))
+        prompt = _SYSTEM_PROMPT_TEMPLATE.format(context=_format_chunks(capped_chunks, file_names))
+
+    if available_files:
+        file_list_str = "\n".join(f"- {f}" for f in sorted(available_files))
+        doc_section = f"\n\nDOCUMENTS IN THIS WORKSPACE:\n{file_list_str}\n"
+        prompt = prompt + doc_section
+
+    return prompt
 
 
 def _build_history_messages(session_messages: list[ChatMessage]) -> list[dict]:
@@ -448,22 +507,48 @@ class RAGService:
         # 2. Layer 0 — Conversational Query Rewriting
         search_query = await _rewrite_query(query, history_messages)
 
-        # 3. Initial retrieval pass — raised from 3 to 8 to capture full Q&A files.
-        # Even at 8 chunks × ~400 tokens each = ~3,200 tokens of raw context,
-        # well within both Gemini (1M ctx) and gpt-oss-20b (131K ctx) limits.
+        # 3. Initial retrieval pass — semantic search
         chunks: list[SearchResult] = self._search(workspace_id, search_query, limit=8)
         logger.info(
             f"RAGService: initial retrieval — {len(chunks)} chunks "
             f"for workspace={workspace_id}, session={session_id}"
         )
 
+        # 3.5 Layer 0.5 — Filename keyword matching (hybrid retrieval)
+        # Guarantees that files whose names match query keywords are retrieved even if
+        # vector similarity is borderline.
+        name_matched_file_ids = await _match_files_by_name(workspace_id, query, self._db)
+        if name_matched_file_ids:
+            name_res = await self._db.execute(
+                select(Chunk)
+                .where(Chunk.file_id.in_(name_matched_file_ids))
+                .order_by(Chunk.file_id, Chunk.chunk_index)
+                .limit(MAX_FILE_CHUNKS_PER_FILE * len(name_matched_file_ids))
+            )
+            existing_chunk_ids = {c.chunk_id for c in chunks}
+            name_chunks = [
+                SearchResult(
+                    score=1.0,  # Exact filename keyword match gets top priority
+                    text=fc.text,
+                    file_id=fc.file_id,
+                    chunk_id=fc.id,
+                    chunk_index=fc.chunk_index,
+                    page_number=fc.page_number,
+                    chunk_type=getattr(fc, "chunk_type", "text"),
+                )
+                for fc in name_res.scalars().all()
+                if fc.id not in existing_chunk_ids
+            ]
+            chunks.extend(name_chunks)
+            logger.info(
+                f"RAGService: filename matching matched {len(name_matched_file_ids)} file(s), "
+                f"added {len(name_chunks)} chunks"
+            )
+
         # 4. Layer 1 — Sibling chunk expansion
         chunks = await _expand_with_siblings(chunks, self._db)
 
         # 4.3 Layer 1.5 — Full-file expansion.
-        # If semantic search found ANY chunk from a file, fetch ALL chunks from
-        # that file. This is the definitive fix for "list all questions" queries
-        # where individual Q&A chunks have low cosine similarity to the broad query.
         chunks = await _expand_with_full_file(chunks, self._db)
 
         # 4.5 Layer 2.5 — Auto-fetch Answer Keys for matched files
@@ -473,14 +558,18 @@ class RAGService:
         unique_file_ids = list({c.file_id for c in chunks})
         file_names = await _fetch_file_names(unique_file_ids, self._db)
 
+        # Fetch all workspace filenames to supply document awareness to the LLM
+        all_ws_files_res = await self._db.execute(
+            select(File.relative_path).where(File.workspace_id == workspace_id)
+        )
+        available_files = [os.path.basename(r) for r in all_ws_files_res.scalars().all()]
+
         # 6. Layer 2 — Agentic multi-hop loop
-        #    The LLM can call `search_workspace` up to MAX_AGENT_ITERATIONS times.
-        #    The `for` loop is provably finite — cannot exceed MAX_AGENT_ITERATIONS.
         all_chunk_ids = {c.chunk_id for c in chunks}
         tool_messages: list[dict] = []  # tracks tool calls within this turn
 
         for iteration in range(MAX_AGENT_ITERATIONS):
-            system_prompt = _build_system_prompt(chunks, file_names)
+            system_prompt = _build_system_prompt(chunks, file_names, available_files=available_files)
             context_message = (
                 f"[Context updated after search #{iteration}]" if iteration > 0
                 else None
@@ -596,7 +685,7 @@ class RAGService:
             await self._db.commit()
 
         # 9. Build final system prompt with all accumulated context
-        final_system_prompt = _build_system_prompt(chunks, file_names)
+        final_system_prompt = _build_system_prompt(chunks, file_names, available_files=available_files)
         final_messages = history_messages + [{"role": "user", "content": query}]
 
         # 10. Stream the final LLM response

@@ -65,3 +65,57 @@ def test_rag_system_prompt_max_context_limit():
     # Facts beyond the cap should NOT appear
     for i in range(MAX_CONTEXT_CHUNKS, MAX_CONTEXT_CHUNKS + 5):
         assert f"Fact {i}" not in prompt
+
+
+def test_rag_system_prompt_with_available_files():
+    """Test that available workspace documents are injected into the system prompt."""
+    prompt = _build_system_prompt(
+        [],
+        {},
+        available_files=["notes.txt", "interview_prep.pdf"]
+    )
+    assert "DOCUMENTS IN THIS WORKSPACE:" in prompt
+    assert "- notes.txt" in prompt
+    assert "- interview_prep.pdf" in prompt
+
+
+def test_match_files_by_name():
+    """Test that query keywords match files by filename correctly."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from chat.rag_service import _match_files_by_name
+
+    async def _test():
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.all.return_value = [
+            (1, "Ekansh_Sethia_Cover_Letter.pdf"),
+            (2, "Goldman probable Interview questions on projects.docx"),
+            (3, "Till 4th Sem.pdf"),
+        ]
+        mock_db.execute.return_value = mock_result
+
+        matched = await _match_files_by_name(
+            workspace_id=1,
+            query="what are interview questions",
+            db=mock_db,
+        )
+        assert matched == [2]
+
+    asyncio.run(_test())
+
+
+def test_rewrite_query_empty_fallback():
+    """Test that if the LLM query rewriter returns empty string, it falls back to original query."""
+    import asyncio
+    from unittest.mock import patch
+    from chat.rag_service import _rewrite_query
+
+    async def _test():
+        with patch("chat.rag_service.llm_complete", return_value="   "):
+            res = await _rewrite_query("what are interview questions", [{"role": "user", "content": "hello"}])
+            assert res == "what are interview questions"
+
+    asyncio.run(_test())
+
+

@@ -16,13 +16,9 @@ Design notes
 
 Score threshold note
 ---------------------
-MIN_SCORE_THRESHOLD is set at 0.15 (was 0.30).
-Rationale: individual Q&A chunks ("Q: What is a deadlock? A: ...") have low
-cosine similarity to queries like "interview questions for goldman sachs"
-because they don't repeat those keywords — they score ~0.15–0.25.
-The 0.30 threshold was silently discarding all of them.
-The LLM is a far better relevance judge than a hard cosine cutoff.
-We retrieve more candidates and let the model decide what to use.
+MIN_SCORE_THRESHOLD is set at 0.30.
+Full-file expansion (Layer 1.5) and filename matching (Layer 0.5) handle deep
+retrieval once the correct file is identified.
 """
 from typing import List
 
@@ -36,8 +32,7 @@ from utils.logger import logger
 
 MIN_SCORE_THRESHOLD = 0.30  # Intentionally conservative — the LLM is a better relevance judge,
                              # but we use 0.30 to avoid pulling noise from tangentially-related
-                             # files. Full-file expansion (Layer 1.5) handles deep retrieval
-                             # once the correct file is identified by its title/header chunk.
+                             # files. Full-file expansion and filename matching handle retrieval.
 
 
 class SearchService:
