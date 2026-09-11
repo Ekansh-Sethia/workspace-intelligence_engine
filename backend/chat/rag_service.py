@@ -564,93 +564,96 @@ class RAGService:
         )
         available_files = [os.path.basename(r) for r in all_ws_files_res.scalars().all()]
 
-        # 6. Layer 2 — Agentic multi-hop loop
+        # 6. Layer 2 — Agentic multi-hop loop (only if initial retrieval found insufficient context)
+        # If we already have strong context (from vector search or filename match), skip directly
+        # to streaming. This cuts Gemini calls from 4 down to 1, preventing 429 quota exhaustion.
         all_chunk_ids = {c.chunk_id for c in chunks}
         tool_messages: list[dict] = []  # tracks tool calls within this turn
 
-        for iteration in range(MAX_AGENT_ITERATIONS):
-            system_prompt = _build_system_prompt(chunks, file_names, available_files=available_files)
-            context_message = (
-                f"[Context updated after search #{iteration}]" if iteration > 0
-                else None
-            )
-            messages_for_agent = history_messages.copy()
-            messages_for_agent.append({"role": "user", "content": query})
-            messages_for_agent.extend(tool_messages)
-            if context_message:
-                messages_for_agent.append({"role": "system", "content": context_message})
+        if len(chunks) < 3:
+            for iteration in range(MAX_AGENT_ITERATIONS):
+                system_prompt = _build_system_prompt(chunks, file_names, available_files=available_files)
+                context_message = (
+                    f"[Context updated after search #{iteration}]" if iteration > 0
+                    else None
+                )
+                messages_for_agent = history_messages.copy()
+                messages_for_agent.append({"role": "user", "content": query})
+                messages_for_agent.extend(tool_messages)
+                if context_message:
+                    messages_for_agent.append({"role": "system", "content": context_message})
 
-            try:
                 try:
-                    agent_response = await _get_router().acompletion(
-                        model="primary",
-                        messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
-                        tools=[_SEARCH_TOOL],
-                        tool_choice="auto",
-                        stream=False,
-                        max_tokens=512,
-                    )
-                except Exception as _agent_err:
-                    logger.warning(
-                        f"RAGService: primary agent call failed ({_agent_err}), trying fallback model"
-                    )
-                    agent_response = await _get_router().acompletion(
-                        model="fallback",
-                        messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
-                        tools=[_SEARCH_TOOL],
-                        tool_choice="auto",
-                        stream=False,
-                        max_tokens=512,
-                    )
+                    try:
+                        agent_response = await _get_router().acompletion(
+                            model="primary",
+                            messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
+                            tools=[_SEARCH_TOOL],
+                            tool_choice="auto",
+                            stream=False,
+                            max_tokens=512,
+                        )
+                    except Exception as _agent_err:
+                        logger.warning(
+                            f"RAGService: primary agent call failed ({_agent_err}), trying fallback model"
+                        )
+                        agent_response = await _get_router().acompletion(
+                            model="fallback",
+                            messages=[{"role": "system", "content": system_prompt}] + messages_for_agent,
+                            tools=[_SEARCH_TOOL],
+                            tool_choice="auto",
+                            stream=False,
+                            max_tokens=512,
+                        )
 
-                choice = agent_response.choices[0]
+                    choice = agent_response.choices[0]
 
-                # If the LLM didn't call any tools, it's satisfied — break early
-                if not (choice.finish_reason == "tool_calls" and choice.message.tool_calls):
-                    logger.info(f"RAGService: agent satisfied after {iteration} extra search(es)")
+                    # If the LLM didn't call any tools, it's satisfied — break early
+                    if not (choice.finish_reason == "tool_calls" and choice.message.tool_calls):
+                        logger.info(f"RAGService: agent satisfied after {iteration} extra search(es)")
+                        break
+
+                    # Process each tool call the LLM issued
+                    for tc in choice.message.tool_calls:
+                        if tc.function.name != "search_workspace":
+                            continue
+                        args = json.loads(tc.function.arguments)
+                        tool_query = args.get("query", "")
+                        if not tool_query:
+                            continue
+
+                        logger.info(f"RAGService: agent search #{iteration + 1} — {tool_query!r}")
+                        new_chunks = self._search(workspace_id, tool_query, limit=5)
+                        # Expand new hits with their siblings too
+                        new_chunks = await _expand_with_siblings(new_chunks, self._db)
+                        new_chunks = await _expand_with_answer_keys(new_chunks, self._db)
+
+                        # Merge deduplicated results into the growing context
+                        for nc in new_chunks:
+                            if nc.chunk_id not in all_chunk_ids:
+                                all_chunk_ids.add(nc.chunk_id)
+                                chunks.append(nc)
+                                if nc.file_id not in file_names:
+                                    new_name = await _fetch_file_names([nc.file_id], self._db)
+                                    file_names.update(new_name)
+
+                        chunks.sort(key=lambda c: (c.file_id, c.chunk_index))
+
+                        # Record tool call + result for the next iteration's message list
+                        tool_messages.append({
+                            "role": "assistant",
+                            "tool_calls": [tc.model_dump()],
+                            "content": None,
+                        })
+                        tool_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": f"Search completed. Found {len(new_chunks)} relevant chunks. The system prompt context has been updated automatically." if new_chunks else "No relevant results found.",
+                        })
+
+                except Exception as exc:
+                    logger.warning(f"RAGService: agentic iteration {iteration} failed ({exc}), proceeding with current context")
                     break
-
-                # Process each tool call the LLM issued
-                for tc in choice.message.tool_calls:
-                    if tc.function.name != "search_workspace":
-                        continue
-                    args = json.loads(tc.function.arguments)
-                    tool_query = args.get("query", "")
-                    if not tool_query:
-                        continue
-
-                    logger.info(f"RAGService: agent search #{iteration + 1} — {tool_query!r}")
-                    new_chunks = self._search(workspace_id, tool_query, limit=5)
-                    # Expand new hits with their siblings too
-                    new_chunks = await _expand_with_siblings(new_chunks, self._db)
-                    new_chunks = await _expand_with_answer_keys(new_chunks, self._db)
-
-                    # Merge deduplicated results into the growing context
-                    for nc in new_chunks:
-                        if nc.chunk_id not in all_chunk_ids:
-                            all_chunk_ids.add(nc.chunk_id)
-                            chunks.append(nc)
-                            if nc.file_id not in file_names:
-                                new_name = await _fetch_file_names([nc.file_id], self._db)
-                                file_names.update(new_name)
-
-                    chunks.sort(key=lambda c: (c.file_id, c.chunk_index))
-
-                    # Record tool call + result for the next iteration's message list
-                    tool_messages.append({
-                        "role": "assistant",
-                        "tool_calls": [tc.model_dump()],
-                        "content": None,
-                    })
-                    tool_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": f"Search completed. Found {len(new_chunks)} relevant chunks. The system prompt context has been updated automatically." if new_chunks else "No relevant results found.",
-                    })
-
-            except Exception as exc:
-                logger.warning(f"RAGService: agentic iteration {iteration} failed ({exc}), proceeding with current context")
-                break
 
         # 6.5 Free ONNX model before LLM streaming starts to keep RAM under 200MB during generation
         try:
